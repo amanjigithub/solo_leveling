@@ -6,13 +6,13 @@ import { getFirestore } from "firebase/firestore";
 // 🛑 PASTE YOUR FIREBASE CONFIGURATION HERE:
 // ==========================================
 const firebaseConfig = {
-    apiKey: "AIzaSyDz3fKmV_gJrZ7bTJh--2LyvjKoPHD1STs",
-    authDomain: "shadow-system-d5f7f.firebaseapp.com",
-    projectId: "shadow-system-d5f7f",
-    storageBucket: "shadow-system-d5f7f.firebasestorage.app",
-    messagingSenderId: "53245691961",
-    appId: "1:53245691961:web:6d314c52ee7698a9e1a5e8",
-    measurementId: "G-RLBZ8NDB1V"
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 export const isFirebaseConfigured = firebaseConfig.apiKey !== "YOUR_API_KEY";
