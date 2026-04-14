@@ -38,16 +38,31 @@ export function analyzePassword(pw) {
 // ANTHROPIC API
 // ─────────────────────────────────────────
 export async function callClaude(messages, systemPrompt) {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("https://text.pollinations.ai/openai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 1000,
-            system: systemPrompt,
-            messages,
+            model: "openai",
+            messages: [
+                { role: "system", content: systemPrompt },
+                ...messages
+            ]
         }),
     });
     const data = await res.json();
-    return data.content?.map(b => b.text || "").join("") || "";
+    let text = data.choices?.[0]?.message?.content || "";
+    
+    // Strip Pollinations legacy warning if it exists
+    text = text.replace(/⚠️ \*\*IMPORTANT NOTICE\*\*(.|\n)*?continue to work normally\.\)?/gi, "");
+    if (text.includes("pollinations.ai")) {
+        text = text.split('\n').filter(line => !line.toLowerCase().includes("pollinations.ai")).join('\n');
+    }
+
+    // If it's a quest generation, ensure we only return the JSON array
+    if (systemPrompt.includes("JSON")) {
+        const match = text.match(/\[[\s\S]*\]/);
+        if (match) text = match[0];
+    }
+
+    return text.trim();
 }
