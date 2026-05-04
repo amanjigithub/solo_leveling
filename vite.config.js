@@ -2,13 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import obfuscatorPlugin from 'vite-plugin-javascript-obfuscator'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
     react(),
-    obfuscatorPlugin({
+    ...(command === 'build' ? [obfuscatorPlugin({
       include: ['src/**/*.js', 'src/**/*.jsx'],
       exclude: [/node_modules/],
-      apply: 'build',
       debugger: true,
       options: {
         compact: true,
@@ -21,9 +20,9 @@ export default defineConfig({
         stringArrayThreshold: 0.75,
         transformObjectKeys: true,
       }
-    })
+    })] : [])
   ],
   build: {
     sourcemap: false, // Ensure source code is not exposed in production
   }
-})
+}))
