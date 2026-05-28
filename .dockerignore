@@ -1,0 +1,29 @@
+# Dependencies
+node_modules
+npm-debug.log*
+
+# Build output
+dist
+dist-ssr
+
+# Environment secrets — NEVER bake into the image
+.env
+.env.*
+*.local
+
+# Git & editor
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# Docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Docs / misc
+README.md
+document
+*.bak
