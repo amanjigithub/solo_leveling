@@ -1,8 +1,22 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { STORAGE_KEY, RANKS, RANK_COLORS, TITLES, DUNGEONS, DEFAULT_GAME_STATE } from "../constants.js";
+import { STORAGE_KEY, RANKS, RANK_COLORS, TITLES, DEFAULT_GAME_STATE } from "../constants.js";
 import { callClaude } from "../utils.js";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, setDoc, onSnapshot } from "../firebase.js";
 import { db } from "../firebase.js";
+import { motion, AnimatePresence } from "framer-motion";
+import DungeonFocusOverlay from "./DungeonFocusOverlay.jsx";
+import { useDungeonStore } from "../store/useDungeonStore.js";
+
+// ── Local cache helpers ──────────────────────────────────────────────────────
+const localLoad = (uid) => {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY(uid));
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+};
+const localSave = (uid, state) => {
+    try { localStorage.setItem(STORAGE_KEY(uid), JSON.stringify(state)); } catch { }
+};
 
 export default function GameApp({ session, onLogout }) {
     const [state, setState] = useState(null);
@@ -11,44 +25,149 @@ export default function GameApp({ session, onLogout }) {
     const [aiLoading, setAiLoading] = useState(false);
     const [aiChat, setAiChat] = useState(null);
     const [chatInput, setChatInput] = useState("");
-    const [dungeonTimer, setDungeonTimer] = useState(null);
+    // dungeonTimer + timerRef moved to useDungeonStore (see DungeonFocusOverlay)
     const [newQuestName, setNewQuestName] = useState("");
     const [newQuestType, setNewQuestType] = useState("bonus");
     const [newQuestStat, setNewQuestStat] = useState("STR");
-    const timerRef = useRef(null);
+    const timerRef = useRef(null); // kept for potential future use
+    // ── Debounce ref: delays Firestore writes by 500ms after last change ──────
+    // Without this, every single state update triggers a Firestore write.
+    // With debouncing: we wait until the user stops changing things for 500ms.
+    // Example: user types in quest name → we don't write 10 times, just once.
+    const saveDebounceRef = useRef(null);
+
+    // ── Zustand dungeon store ─────────────────────────────────────────
+    // 📖 Instead of managing dungeon + timer state here in GameApp,
+    // we delegate to the Zustand store. DungeonFocusOverlay reads from it directly.
+    // This means the 1-second timer tick NO LONGER causes GameApp to re-render!
+    const setDungeonFromStore = useDungeonStore(s => s.setDungeon);
 
     const SK = STORAGE_KEY(session.uid);
 
     useEffect(() => {
-        (async () => {
-            try {
-                const docRef = doc(db, "hunters", session.uid);
-                const snap = await getDoc(docRef);
-                if (snap.exists()) {
-                    const loaded = snap.data();
-                    const today = new Date().toDateString();
-                    if (loaded.lastQuestReset !== today) {
-                        loaded.quests = loaded.quests.map(q => ({ ...q, done: false }));
-                        loaded.lastQuestReset = today;
-                        const lastLogin = loaded.player.lastLoginDate;
-                        const yesterday = new Date(Date.now() - 86400000).toDateString();
-                        loaded.player.streak =
-                            lastLogin === yesterday ? loaded.player.streak + 1 :
-                                lastLogin === today ? loaded.player.streak : 0;
-                        loaded.player.lastLoginDate = today;
-                    }
-                    setState(loaded);
-                } else {
-                    setState(DEFAULT_GAME_STATE(session.uid, session.username));
-                }
-            } catch {
-                setState(DEFAULT_GAME_STATE(session.uid, session.username));
+        const uid = session.uid;
+
+        // ──────────────────────────────────────────────────────────────────────
+        // 📖 WHAT IS HAPPENING HERE?
+        //
+        // Before: getDoc() → fetches data ONCE, then disconnects.
+        // Now:    onSnapshot() → fetches data AND keeps a LIVE connection open.
+        //         Whenever Firestore data changes (from ANY device), this callback
+        //         runs automatically. The app updates in real time — no refresh needed.
+        // ──────────────────────────────────────────────────────────────────────
+
+        // Helper: apply daily reset logic in one place (reused for both local and Firestore)
+        const applyDailyReset = (data) => {
+            const today = new Date().toDateString();
+            if (data.lastQuestReset !== today) {
+                const lastLogin = data.player?.lastLoginDate;
+                const yesterday = new Date(Date.now() - 86400000).toDateString();
+                return {
+                    ...data,
+                    quests: data.quests.map(q => ({ ...q, done: false })),
+                    lastQuestReset: today,
+                    player: {
+                        ...data.player,
+                        streak: lastLogin === yesterday ? (data.player.streak + 1)
+                               : lastLogin === today    ? data.player.streak
+                               : 0,
+                        lastLoginDate: today,
+                    },
+                };
             }
-        })();
+            return data;
+        };
+
+        // ── Step 1: Show local cache instantly (zero loading time) ─────────
+        const cached = localLoad(uid);
+        if (cached) {
+            const resetCached = applyDailyReset(cached);
+            if (resetCached !== cached) localSave(uid, resetCached); // persist reset
+            setState(resetCached);
+        }
+
+        // ── Step 2: Open real-time Firestore listener ──────────────────────
+        // onSnapshot() returns an "unsubscribe" function.
+        // We MUST call it when done, or the connection leaks (stays open forever).
+        const docRef = doc(db, "hunters", uid);
+        const unsubscribe = onSnapshot(
+            docRef,
+            (snap) => {
+                // This callback fires:
+                //   • Immediately when you first call onSnapshot() (initial load)
+                //   • Every time the Firestore document changes (from ANY device)
+
+                if (snap.exists()) {
+                    let loaded = snap.data();
+                    loaded = applyDailyReset(loaded);
+
+                    setState(prev => {
+                        // Safety check: don't overwrite local data that has MORE quests
+                        // (This protects against stale cloud data overwriting new local quests)
+                        const prevCount = prev ? prev.quests?.length ?? 0 : 0;
+                        const remoteCount = loaded.quests?.length ?? 0;
+                        if (!prev || remoteCount >= prevCount) {
+                            localSave(uid, loaded);
+                            // ── Sync dungeon state into Zustand store ──────────────────
+                            // 📖 DungeonFocusOverlay reads from useDungeonStore, not from state.
+                            // So when Firestore data loads, we push dungeon data into the store.
+                            // This keeps the store and Firestore in sync automatically.
+                            if (loaded.dungeon) setDungeonFromStore(loaded.dungeon);
+                            return loaded;
+                        }
+                        return prev;
+                    });
+                } else if (!cached) {
+                    // New user — no Firestore doc AND no local cache → create fresh state
+                    const fresh = DEFAULT_GAME_STATE(uid, session.username);
+                    localSave(uid, fresh);
+                    setState(fresh);
+                }
+            },
+            (error) => {
+                // Firestore listener failed (no internet, rules rejected, etc.)
+                // Gracefully fall back to local cache — app still works offline
+                console.warn("[Firestore] onSnapshot error, using local cache:", error.message);
+                if (!cached) {
+                    const fresh = DEFAULT_GAME_STATE(uid, session.username);
+                    localSave(uid, fresh);
+                    setState(fresh);
+                }
+            }
+        );
+
+        // ── Cleanup: React calls this when the component unmounts ──────────
+        // This closes the WebSocket connection to Firestore.
+        // Without this, the listener would keep running even after logout.
+        // Think of it as hanging up the phone when the call is over.
+        return () => {
+            unsubscribe(); // 📴 Close the live connection
+        };
     }, [session.uid]);
 
     const save = useCallback(async (s) => {
-        try { await setDoc(doc(db, "hunters", session.uid), s); } catch { }
+        // Always save to localStorage first (instant, reliable)
+        localSave(session.uid, s);
+
+        // ── Debounced Firestore write ──────────────────────────────────────
+        // Instead of writing to Firestore immediately on every state change,
+        // we wait 500ms. If another change happens within that 500ms, we reset
+        // the timer. Only the LAST change within each 500ms window gets written.
+        //
+        // WHY? Without debouncing:
+        //   User clicks "complete quest" → 1 Firestore write (fine)
+        //   User types 10 characters → 10 Firestore writes (wasteful!)
+        //
+        // With debouncing:
+        //   User types 10 characters fast → only 1 Firestore write (efficient)
+        if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+        saveDebounceRef.current = setTimeout(async () => {
+            try {
+                await setDoc(doc(db, "hunters", session.uid), s);
+            } catch (e) {
+                console.warn("[Firestore] Save failed, data kept in localStorage:", e.message);
+            }
+        }, 500);
     }, [session.uid]);
 
     const update = useCallback((fn) => {
@@ -105,12 +224,12 @@ export default function GameApp({ session, onLogout }) {
             if (!quest || !quest.done) return prev;
             let s = { ...prev };
             s.quests = s.quests.map(q => q.id === questId ? { ...q, done: false, streak: Math.max(0, q.streak - 1) } : q);
-            
+
             let p = { ...s.player };
             p.xp -= quest.xp;
             p.totalCompleted = Math.max(0, p.totalCompleted - 1);
             p.stats = { ...p.stats, [quest.stat]: Math.max(10, (p.stats[quest.stat] || 10) - 1) };
-            
+
             while (p.xp < 0 && p.level > 1) {
                 p.level -= 1;
                 let targetXp = 1000;
@@ -119,11 +238,11 @@ export default function GameApp({ session, onLogout }) {
                 p.xp += p.xpToNext;
             }
             if (p.xp < 0 && p.level === 1) p.xp = 0;
-            
+
             const newRankIdx = Math.min(Math.floor((p.level - 1) / 10), RANKS.length - 1);
             p.rank = RANKS[newRankIdx];
             p.title = TITLES[p.rank];
-            
+
             s.player = p;
             return s;
         });
@@ -138,57 +257,139 @@ export default function GameApp({ session, onLogout }) {
 
     const deleteQuest = (id) => update(prev => ({ ...prev, quests: prev.quests.filter(q => q.id !== id) }));
 
-    const enterDungeon = () => {
+    // ── enterDungeon / startFocusBlock / completeFocusBlock / retreatDungeon ───────
+    // These are now handled INSIDE DungeonFocusOverlay via useDungeonStore.
+    // GameApp only needs a callback for when XP should be awarded:
+    const handleDungeonBlockComplete = (xpEarned, defeated) => {
         update(prev => {
-            const dungeon = DUNGEONS[Math.min(RANKS.indexOf(prev.player.rank), DUNGEONS.length - 1)];
-            let s = { ...prev, dungeon: { active: true, bossName: dungeon.boss, bossEmoji: dungeon.emoji, bossHpMax: 100, bossHp: 100, blocks: 0, blocksNeeded: dungeon.blocksNeeded } };
-            return addLog(s, `Gate opened! Boss: ${dungeon.boss}`, "system");
-        });
-        startFocusBlock();
-    };
-
-    const startFocusBlock = () => {
-        if (timerRef.current) clearInterval(timerRef.current);
-        setDungeonTimer(25 * 60);
-        timerRef.current = setInterval(() => {
-            setDungeonTimer(t => {
-                if (t <= 1) { clearInterval(timerRef.current); completeFocusBlock(); return null; }
-                return t - 1;
-            });
-        }, 1000);
-    };
-
-    const completeFocusBlock = () => {
-        update(prev => {
-            if (!prev.dungeon.active) return prev;
-            const blocks = prev.dungeon.blocks + 1;
-            const dmg = Math.floor(100 / prev.dungeon.blocksNeeded);
-            const newHp = Math.max(0, prev.dungeon.bossHp - dmg);
-            const defeated = blocks >= prev.dungeon.blocksNeeded;
-            let s = { ...prev, dungeon: { ...prev.dungeon, blocks, bossHp: newHp, active: !defeated } };
-            s.player = { ...s.player, xp: s.player.xp + (defeated ? 3000 : 500) };
-            s = addLog(s, defeated ? `Boss defeated! +3000 XP!` : `Block complete! +500 XP`, defeated ? "complete" : "info");
-            if (defeated) setTimeout(() => setToast({ type: "dungeon", data: prev.dungeon.bossName }), 100);
+            let s = { ...prev };
+            s.player = { ...s.player, xp: s.player.xp + xpEarned };
+            if (defeated) {
+                setTimeout(() => setToast({ type: "dungeon", data: prev.dungeon?.bossName || "Boss" }), 100);
+            }
             return s;
         });
-        setDungeonTimer(null);
     };
 
-    const retreatDungeon = () => {
-        if (timerRef.current) clearInterval(timerRef.current);
-        setDungeonTimer(null);
-        update(prev => addLog({ ...prev, dungeon: { ...prev.dungeon, active: false } }, "Retreated from dungeon.", "system"));
+    const handleDungeonLog = (msg, type) => {
+        update(prev => addLog(prev, msg, type));
     };
+
+    // Keep main state.dungeon in sync with the Zustand store when user interacts
+    // We subscribe to dungeon store changes and write them back to state for Firestore save
+    const dungeonFromStore = useDungeonStore(s => s.dungeon);
+    useEffect(() => {
+        if (!state) return;
+        // Only sync back to state (for Firestore save) if dungeon actually changed
+        const currentDungeon = state.dungeon;
+        const storeDungeon = dungeonFromStore;
+        if (JSON.stringify(currentDungeon) !== JSON.stringify(storeDungeon)) {
+            update(prev => ({ ...prev, dungeon: storeDungeon }));
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dungeonFromStore]);
+
+    // ── JSON extraction helper ────────────────────────────────────────────────
+    // 📖 WHY THIS EXISTS:
+    // Free AI models sometimes ignore "return ONLY JSON" instructions.
+    // They might say "We need to know more..." or wrap JSON in explanation text.
+    // This function tries MULTIPLE strategies to find valid JSON in any response.
+    //
+    // Strategy 1: Find a [...] array directly
+    // Strategy 2: Strip markdown code fences (```json ... ```) then parse
+    // Strategy 3: Find the first [ to the last ] in the whole string
+    // If ALL strategies fail, it throws a clear error instead of a cryptic crash.
+    const extractQuestJSON = (raw) => {
+        // Strategy 1: Find a clean [...] array block
+        const arrMatch = raw.match(/\[[\s\S]*?\]/);
+        if (arrMatch) {
+            try { return JSON.parse(arrMatch[0]); } catch (_) { /* try next */ }
+        }
+
+        // Strategy 2: Strip markdown fences, then try to parse the whole thing
+        const stripped = raw.replace(/```json|```/gi, "").trim();
+        if (stripped.startsWith("[")) {
+            try { return JSON.parse(stripped); } catch (_) { /* try next */ }
+        }
+
+        // Strategy 3: Find first [ and last ] and try that substring
+        const start = raw.indexOf("[");
+        const end   = raw.lastIndexOf("]");
+        if (start !== -1 && end > start) {
+            try { return JSON.parse(raw.slice(start, end + 1)); } catch (_) { /* try next */ }
+        }
+
+        // All strategies failed — AI returned plain text, not JSON
+        // Throw a friendly error that explains what happened
+        throw new Error(
+            "The AI returned a text response instead of quest data. " +
+            "This sometimes happens with free AI models. Tap 'Try again' or rephrase your request."
+        );
+    };
+
+    // Strict JSON-only prompt used as a RETRY if the first attempt fails
+    // It's more aggressive — no room for the AI to talk back
+    const STRICT_QUEST_PROMPT = `Return ONLY a raw JSON array. No text before or after. No markdown. No explanation. Exactly this format: [{"name":"...","type":"mandatory","stat":"STR","emoji":"⚔"}]. Any other output is invalid. Three items.`;
 
     const askSystem = async () => {
         if (!chatInput.trim() || aiLoading || !state) return;
         const q = chatInput.trim(); setChatInput(""); setAiLoading(true);
-        const sysPmt = `You are the mysterious System from Solo Leveling — an all-knowing AI guiding a Hunter. Speak in short, dramatic, cryptic, motivational messages. Use [SYSTEM] or [ALERT] tags occasionally. Under 80 words. Be intense. Player: Level ${state.player.level}, Rank ${state.player.rank}, ${state.player.streak} day streak. Completed: ${state.quests.filter(q => q.done).length}/${state.quests.length} quests today.`;
-        try {
-            const ans = await callClaude([{ role: "user", content: q }], sysPmt);
-            setAiChat({ question: q, answer: ans });
-        } catch {
-            setAiChat({ question: q, answer: "[SYSTEM ERROR] The void is silent. Try again." });
+
+        // ── Intent detection: does the user want quests added? ──────────
+        const wantsQuests = /add quest|generate quest|create quest|suggest quest|give me quest|quests for me|quests (based on|according to|for a|as a)|i('m| am) (a |an )?.*(student|developer|engineer|athlete|designer|writer|gamer)/i.test(q);
+
+        if (wantsQuests) {
+            // Generate personalized quests based on user's context, then actually add them
+            const questPmt = `You are the System from Solo Leveling. The hunter described themselves: "${q}". Based on their background, generate exactly 3 highly personalized daily quests. Return ONLY a valid JSON array, no markdown, no explanation: [{"name":"specific quest name","type":"mandatory|bonus","stat":"STR|INT|VIT|AGI|SEN","emoji":"single emoji"}]. Stat guide: STR=physical/gym, INT=study/coding/mental, VIT=health/sleep/diet, AGI=movement/speed, SEN=focus/meditation. Make quests concrete, actionable, and tailored to their background.`;
+            try {
+                // 📖 ATTEMPT 1: Ask the AI normally
+                const raw = await callClaude([{ role: "user", content: q }], questPmt);
+
+                let quests;
+                try {
+                    // 📖 Try to extract JSON from the response using multiple strategies
+                    quests = extractQuestJSON(raw);
+                } catch {
+                    // 📖 ATTEMPT 2 (RETRY): AI gave us text — ask again with ultra-strict prompt
+                    // The retry has NO context, just the strict JSON requirement
+                    console.warn("[AI] First attempt returned non-JSON, retrying with strict prompt...");
+                    const raw2 = await callClaude(
+                        [{ role: "user", content: `Generate 3 daily quests for a ${q}. ${STRICT_QUEST_PROMPT}` }],
+                        STRICT_QUEST_PROMPT
+                    );
+                    // If this ALSO fails, extractQuestJSON will throw and the outer catch handles it
+                    quests = extractQuestJSON(raw2);
+                }
+
+                update(prev => {
+                    const nq = quests.map((quest, i) => ({
+                        id: `ai-q-${Date.now()}-${i}`,
+                        name: quest.name,
+                        type: quest.type || "bonus",
+                        stat: quest.stat || "INT",
+                        xp: quest.type === "mandatory" ? 800 : 500,
+                        done: false,
+                        streak: 0,
+                        emoji: quest.emoji || "⭐"
+                    }));
+                    return addLog({ ...prev, quests: [...prev.quests, ...nq] }, `System analyzed your profile and added ${nq.length} personalized quests.`, "ai");
+                });
+                setAiChat({ question: q, answer: `[SYSTEM] Hunter profile analyzed. ${quests.length} custom quests deployed to your quest log. The System has spoken — now arise and complete them.` });
+            } catch (err) {
+                console.error("[AI] Quest generation error:", err);
+                // 📖 Show the friendly error message, not the raw JS error
+                setAiChat({ question: q, answer: `[SYSTEM ERROR] ${err.message || "Quest generation failed. Try again."}` });
+            }
+        } else {
+            // Regular motivational chat
+            const sysPmt = `You are the mysterious System from Solo Leveling — an all-knowing AI guiding a Hunter. Speak in short, dramatic, cryptic, motivational messages. Use [SYSTEM] or [ALERT] tags occasionally. Under 80 words. Be intense. Player: Level ${state.player.level}, Rank ${state.player.rank}, ${state.player.streak} day streak. Completed: ${state.quests.filter(q => q.done).length}/${state.quests.length} quests today.`;
+            try {
+                const ans = await callClaude([{ role: "user", content: q }], sysPmt);
+                setAiChat({ question: q, answer: ans });
+            } catch (err) {
+                console.error("[AI] Chat error:", err);
+                setAiChat({ question: q, answer: `[SYSTEM ERROR] ${err.message || "The void is silent. Try again."}` });
+            }
         }
         setAiLoading(false);
     };
@@ -199,16 +400,20 @@ export default function GameApp({ session, onLogout }) {
         const sysPmt = `You are the System from Solo Leveling. Generate exactly 3 new daily quest suggestions. Return ONLY valid JSON array — no markdown, no explanation: [{"name":"quest name","type":"mandatory|bonus","stat":"STR|INT|VIT|AGI|SEN","emoji":"single emoji"}] Stat guide: STR=physical, INT=mental, VIT=health/sleep, AGI=movement, SEN=mindfulness. Hunter rank: ${state.player.rank}. Make quests realistic habits at that level.`;
         try {
             const raw = await callClaude([{ role: "user", content: "Generate 3 quests" }], sysPmt);
-            const quests = JSON.parse(raw.replace(/```json|```/g, "").trim());
+            // 📖 Use the same robust extraction helper — handles all AI response formats
+            const quests = extractQuestJSON(raw);
             update(prev => {
                 const nq = quests.map((q, i) => ({ id: `ai-q-${Date.now()}-${i}`, name: q.name, type: q.type || "bonus", stat: q.stat || "INT", xp: q.type === "mandatory" ? 800 : 500, done: false, streak: 0, emoji: q.emoji || "⭐" }));
                 return addLog({ ...prev, quests: [...prev.quests, ...nq] }, `System generated ${nq.length} new quests.`, "ai");
             });
-        } catch { update(prev => addLog(prev, "Failed to generate quests. Insufficient mana.", "system")); }
+        } catch (err) {
+            update(prev => addLog(prev, `Failed to generate quests: ${err.message}`, "system"));
+        }
         setAiLoading(false);
     };
 
-    const formatTimer = s => { if (!s) return null; const m = Math.floor(s / 60), sec = s % 60; return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`; };
+    // formatTimer is now only needed as a local helper if needed elsewhere
+    // (timer display is handled by DungeonFocusOverlay)
 
     if (!state) return (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
@@ -359,8 +564,20 @@ export default function GameApp({ session, onLogout }) {
                                 </button>
                             </div>
 
+                            {/* Quest list — wrapped in AnimatePresence for enter/exit animations */}
+                            {/* 📖 AnimatePresence tracks when children are ADDED or REMOVED and plays exit animations */}
+                            <AnimatePresence initial={false}>
                             {state.quests.map(q => (
-                                <div key={q.id} className="clip-sm" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: q.done ? "rgba(0,168,255,0.02)" : "rgba(0,168,255,0.06)", border: `1px solid ${q.done ? "#0d2d47" : q.type === "mandatory" ? "rgba(255,34,68,0.25)" : "#0d2d47"}`, opacity: q.done ? 0.5 : 1, animation: !q.done && q.type === "mandatory" ? "urgent-pulse 2.5s ease-in-out infinite" : "none", transition: "all 0.2s" }}>
+                                <motion.div
+                                    key={q.id}
+                                    layout
+                                    initial={{ opacity: 0, x: -24, height: 0 }}
+                                    animate={{ opacity: 1, x: 0, height: "auto" }}
+                                    exit={{ opacity: 0, x: 24, height: 0 }}
+                                    transition={{ duration: 0.22, ease: "easeOut" }}
+                                    className="clip-sm"
+                                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", background: q.done ? "rgba(0,168,255,0.02)" : "rgba(0,168,255,0.06)", border: `1px solid ${q.done ? "#0d2d47" : q.type === "mandatory" ? "rgba(255,34,68,0.25)" : "#0d2d47"}`, opacity: q.done ? 0.5 : 1, animation: !q.done && q.type === "mandatory" ? "urgent-pulse 2.5s ease-in-out infinite" : "none" }}
+                                >
                                     <div className="clip-sm" onClick={() => q.done ? uncompleteQuest(q.id) : completeQuest(q.id)} style={{ width: 24, height: 24, border: `1.5px solid ${q.done ? "#00a8ff" : "#4a7a9b"}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", background: q.done ? "#00a8ff" : "transparent", color: q.done ? "#020408" : "#4a7a9b", fontSize: 11, flexShrink: 0, boxShadow: q.done ? "0 0 8px #00a8ff" : "none", transition: "all 0.2s" }}>
                                         {q.done ? "✓" : "○"}
                                     </div>
@@ -374,11 +591,15 @@ export default function GameApp({ session, onLogout }) {
                                         </div>
                                     </div>
                                     <div className="clip-sm" style={{ padding: "3px 8px", border: `1px solid ${rankColor}44`, fontFamily: "'Orbitron',monospace", fontSize: 9, color: rankColor, flexShrink: 0 }}>{q.stat}+1</div>
-                                    <button onClick={() => deleteQuest(q.id)} style={{ background: "none", border: "none", color: "#1e3a52", cursor: "pointer", fontSize: 14, flexShrink: 0, transition: "color 0.2s" }}
-                                        onMouseEnter={e => e.target.style.color = "#ff2244"}
-                                        onMouseLeave={e => e.target.style.color = "#1e3a52"}>✕</button>
-                                </div>
+                                    <motion.button
+                                        onClick={() => deleteQuest(q.id)}
+                                        style={{ background: "none", border: "none", color: "#1e3a52", cursor: "pointer", fontSize: 14, flexShrink: 0 }}
+                                        whileHover={{ color: "#ff2244", scale: 1.2 }}
+                                        whileTap={{ scale: 0.9 }}
+                                    >✕</motion.button>
+                                </motion.div>
                             ))}
+                            </AnimatePresence>
 
                             <div style={{ display: "flex", gap: 8, marginTop: 4, padding: "12px 14px", background: "rgba(0,168,255,0.02)", border: "1px dashed #0d2d47" }}>
                                 <input value={newQuestName} onChange={e => setNewQuestName(e.target.value)} onKeyDown={e => e.key === "Enter" && addQuest()} placeholder="Add new quest..." style={{ flex: 1, background: "transparent", border: "1px solid #0d2d47", color: "#c8e8ff", padding: "8px 12px", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, outline: "none" }} />
@@ -394,51 +615,16 @@ export default function GameApp({ session, onLogout }) {
                         </div>
                     )}
 
-                    {/* DUNGEON */}
+                    {/* DUNGEON — now using the extracted DungeonFocusOverlay component */}
+                    {/* 📖 The old 60+ lines of dungeon JSX is replaced by ONE component.
+                         DungeonFocusOverlay reads its state from useDungeonStore directly.
+                         GameApp only passes the player rank and callbacks. */}
                     {tab === "dungeon" && (
-                        <div className="panel clip" style={{ flex: 1 }}>
-                            <div className="panel-title">⚔ DUNGEON GATE — {state.player.rank}-RANK</div>
-                            {!state.dungeon.active ? (
-                                <div style={{ textAlign: "center", padding: "40px 20px" }}>
-                                    <div style={{ fontSize: 64, animation: "float 3s ease-in-out infinite", marginBottom: 16 }}>🚪</div>
-                                    <div style={{ fontFamily: "'Orbitron',monospace", fontSize: 13, letterSpacing: 3, color: "#4a7a9b", marginBottom: 8 }}>NO GATE OPEN</div>
-                                    <div style={{ fontSize: 13, color: "#4a7a9b", marginBottom: 24 }}>Each 25-min focus block damages the boss. Defeat it for massive XP.</div>
-                                    <button className="btn btn-blue clip" style={{ padding: "12px 32px", fontSize: 10 }} onClick={enterDungeon}>▶ OPEN GATE</button>
-                                </div>
-                            ) : (
-                                <div>
-                                    <div style={{ textAlign: "center", padding: "20px 0 16px" }}>
-                                        <div style={{ fontSize: 64, animation: "float 3s ease-in-out infinite", filter: "drop-shadow(0 0 20px rgba(255,34,68,0.5))" }}>{state.dungeon.bossEmoji || "👹"}</div>
-                                        <div style={{ fontFamily: "'Orbitron',monospace", fontSize: 13, letterSpacing: 3, color: "#ff2244", marginTop: 8, textShadow: "0 0 10px rgba(255,34,68,0.5)" }}>{state.dungeon.bossName}</div>
-                                    </div>
-                                    <div style={{ marginBottom: 16 }}>
-                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#4a7a9b", letterSpacing: 1.5, marginBottom: 6 }}>
-                                            <span style={{ fontFamily: "'Orbitron',monospace", fontSize: 9 }}>BOSS HP</span>
-                                            <span style={{ color: "#ff2244" }}>{state.dungeon.bossHp}%</span>
-                                        </div>
-                                        <div className="bar-track" style={{ height: 12 }}>
-                                            <div className="bar-fill bar-red" style={{ width: `${state.dungeon.bossHp}%` }} />
-                                        </div>
-                                    </div>
-                                    <div style={{ marginBottom: 20, fontSize: 13, color: "#4a7a9b" }}>Blocks: <span style={{ color: "#00a8ff", fontFamily: "'Orbitron',monospace" }}>{state.dungeon.blocks} / {state.dungeon.blocksNeeded}</span></div>
-                                    {dungeonTimer !== null ? (
-                                        <div style={{ textAlign: "center", marginBottom: 20 }}>
-                                            <div style={{ fontFamily: "'Orbitron',monospace", fontSize: 48, color: "#00a8ff", textShadow: "0 0 20px rgba(0,168,255,0.5)" }}>{formatTimer(dungeonTimer)}</div>
-                                            <div style={{ fontSize: 11, color: "#4a7a9b", letterSpacing: 2, marginTop: 4 }}>FOCUS BLOCK ACTIVE</div>
-                                            <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 16 }}>
-                                                <button className="btn btn-blue clip-sm" onClick={completeFocusBlock}>⚡ COMPLETE</button>
-                                                <button className="btn btn-red clip-sm" onClick={retreatDungeon}>✕ RETREAT</button>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div style={{ display: "flex", gap: 10 }}>
-                                            <button className="btn btn-blue clip-sm" style={{ flex: 1 }} onClick={startFocusBlock}>▶ START BLOCK</button>
-                                            <button className="btn btn-red clip-sm" onClick={retreatDungeon}>✕ RETREAT</button>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
+                        <DungeonFocusOverlay
+                            playerRank={state.player.rank}
+                            onBlockComplete={handleDungeonBlockComplete}
+                            onLogMessage={handleDungeonLog}
+                        />
                     )}
 
                     {/* SHADOWS */}

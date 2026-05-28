@@ -12,18 +12,29 @@ export default defineConfig({
       debugger: true,
       options: {
         compact: true,
-        controlFlowFlattening: true,
-        controlFlowFlatteningThreshold: 0.75,
-        deadCodeInjection: true,
-        deadCodeInjectionThreshold: 0.4,
+        controlFlowFlattening: false,
+        deadCodeInjection: false,
         stringArray: true,
         stringArrayEncoding: ['base64'],
-        stringArrayThreshold: 0.75,
-        transformObjectKeys: true,
+        stringArrayThreshold: 0.5,
+        transformObjectKeys: false,
       }
     })
   ],
   build: {
-    sourcemap: false, // Ensure source code is not exposed in production
+    sourcemap: false,
+  },
+  // ── Dev proxy: routes /api/openrouter → openrouter.ai server-side ──
+  // Bypasses ad blockers & CORS since the HTTP call is made by Node, not the browser
+  server: {
+    proxy: {
+      '/api/openrouter': {
+        target: 'https://openrouter.ai/api/v1',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/openrouter/, ''),
+        secure: true,
+      }
+    }
   }
 })
+

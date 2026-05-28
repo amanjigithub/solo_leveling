@@ -38,12 +38,15 @@ export default function App() {
         return (
             <div style={{ background: "#020408", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#ff2244", fontFamily: "'Orbitron',monospace", textAlign: "center", padding: 20 }}>
                 <div>
-                    <h1 style={{ fontSize: 24, marginBottom: 20 }}>⚠ SYSTEM OFFLINE: BACKEND REQUIRED</h1>
+                    <h1 style={{ fontSize: 24, marginBottom: 20 }}>⚠ SYSTEM OFFLINE: FIREBASE KEYS MISSING</h1>
                     <p style={{ fontSize: 14, color: "#4a7a9b", maxWidth: 600, lineHeight: 1.6 }}>
-                        The Shadow System has been upgraded for cross-device synchronization and true Gmail login.<br /><br />
-                        To boot the system, you must create a free Firebase Project, copy the <b>firebaseConfig</b> keys, and paste them into <br />
-                        <span style={{ color: "#00a8ff" }}>src/firebase.js</span>.<br /><br />
-                        Once pasted and saved, the system will automatically come online!
+                        The Shadow System requires Firebase to sync your progress and authenticate your identity.<br /><br />
+                        Open your <span style={{ color: "#00a8ff" }}>.env</span> file in the project root and fill in all{" "}
+                        <span style={{ color: "#00a8ff" }}>VITE_FIREBASE_*</span> values with your real Firebase project credentials.<br /><br />
+                        Get them from{" "}
+                        <span style={{ color: "#ffd700" }}>console.firebase.google.com</span>{" "}
+                        → Project Settings → Your Apps.<br /><br />
+                        After saving <span style={{ color: "#00a8ff" }}>.env</span>, restart the dev server and the system will come online!
                     </p>
                 </div>
             </div>

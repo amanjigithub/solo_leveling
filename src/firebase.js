@@ -1,9 +1,9 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
 
 // ==========================================
-// 🛑 PASTE YOUR FIREBASE CONFIGURATION HERE:
+// 🔐 Firebase config — values come from .env
 // ==========================================
 const firebaseConfig = {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -15,7 +15,17 @@ const firebaseConfig = {
     measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
-export const isFirebaseConfigured = firebaseConfig.apiKey !== "YOUR_API_KEY";
+// ── Validate all required keys are real, non-empty, non-placeholder ──
+const REQUIRED_KEYS = ["apiKey", "authDomain", "projectId", "storageBucket", "messagingSenderId", "appId"];
+export const isFirebaseConfigured = REQUIRED_KEYS.every((key) => {
+    const val = firebaseConfig[key];
+    return (
+        val &&
+        typeof val === "string" &&
+        val.trim() !== "" &&
+        !val.startsWith("YOUR_")   // catches any remaining placeholder text
+    );
+});
 
 let app, auth, googleProvider, db;
 
@@ -26,4 +36,4 @@ if (isFirebaseConfigured) {
     db = getFirestore(app);
 }
 
-export { auth, googleProvider, db };
+export { app, auth, googleProvider, db, doc, setDoc, onSnapshot };
