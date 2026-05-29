@@ -96,6 +96,8 @@ export default function AuthPage() {
                 {error && <div className="form-error">⚠ {error}</div>}
                 {success && <div className="form-success">✓ {success}</div>}
 
+                <form onSubmit={e => { e.preventDefault(); mode === "login" ? handleLogin() : handleSignup(); }}>
+
                 {/* Username */}
                 <div className="form-group">
                     <label className="form-label">Hunter Name</label>
@@ -104,7 +106,6 @@ export default function AuthPage() {
                             className={`form-input ${username && mode === "signup" && username.length >= 3 ? "success" : username && mode === "signup" && username.length < 3 ? "error" : ""}`}
                             value={username}
                             onChange={e => setUsername(e.target.value)}
-                            onKeyDown={e => e.key === "Enter" && (mode === "login" ? handleLogin() : handleSignup())}
                             placeholder={mode === "login" ? "Enter your hunter name" : "Choose a hunter name"}
                             autoComplete="username"
                         />
@@ -126,7 +127,6 @@ export default function AuthPage() {
                             type={showPw ? "text" : "password"}
                             value={password}
                             onChange={e => setPassword(e.target.value)}
-                            onKeyDown={e => e.key === "Enter" && (mode === "login" ? handleLogin() : handleSignup())}
                             placeholder="Enter your password"
                             style={{ paddingRight: 40 }}
                             autoComplete={mode === "login" ? "current-password" : "new-password"}
@@ -168,7 +168,6 @@ export default function AuthPage() {
                                 type={showConfirm ? "text" : "password"}
                                 value={confirmPw}
                                 onChange={e => setConfirmPw(e.target.value)}
-                                onKeyDown={e => e.key === "Enter" && handleSignup()}
                                 placeholder="Re-enter your password"
                                 style={{ paddingRight: 40 }}
                                 autoComplete="new-password"
@@ -199,9 +198,11 @@ export default function AuthPage() {
                 )}
 
                 {/* Submit */}
-                <button className="btn-submit" onClick={mode === "login" ? handleLogin : handleSignup} disabled={loading || !!success}>
+                <button type="submit" className="btn-submit" disabled={loading || !!success}>
                     {loading ? <span className="spin">⚙</span> : mode === "login" ? "▶ ENTER THE SYSTEM" : "◈ REGISTER AS HUNTER"}
                 </button>
+
+                </form>
 
                 {/* Footer note */}
                 <div style={{ textAlign: "center", marginTop: 20, fontSize: 11, color: "#1e3a52", letterSpacing: 1 }}>
