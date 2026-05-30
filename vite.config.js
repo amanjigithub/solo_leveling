@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import obfuscatorPlugin from 'vite-plugin-javascript-obfuscator'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig(({ command }) => ({
+export default defineConfig({
   plugins: [
     react(),
 
@@ -64,6 +64,7 @@ export default defineConfig(({ command }) => ({
     obfuscatorPlugin({
       include: ['src/**/*.js', 'src/**/*.jsx'],
       exclude: [/node_modules/],
+      apply: 'build',
       debugger: true,
       options: {
         compact: true,
@@ -74,7 +75,7 @@ export default defineConfig(({ command }) => ({
         stringArrayThreshold: 0.5,
         transformObjectKeys: false,
       }
-    })] : [])
+    })
   ],
 
   build: {
