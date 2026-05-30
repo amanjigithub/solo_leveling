@@ -1,1 +1,7 @@
 node_modules
+
+# Firebase credentials — NEVER commit these
+.env
+.env.local
+.env.production
+
