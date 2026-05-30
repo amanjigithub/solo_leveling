@@ -36,6 +36,74 @@ export default function GameApp({ session, onLogout }) {
     // Example: user types in quest name → we don't write 10 times, just once.
     const saveDebounceRef = useRef(null);
 
+    // ── Push notification state ───────────────────────────────────────────────
+    // Tracks browser Notification permission: 'default' | 'granted' | 'denied'
+    const [notifStatus, setNotifStatus] = useState(
+        typeof Notification !== 'undefined' ? Notification.permission : 'denied'
+    );
+    const midnightTimerRef = useRef(null); // stores the setTimeout id for midnight alert
+
+    // ── Schedule daily quest-reset notification ──────────────────────────────
+    // 📖 HOW THIS WORKS:
+    // 1. We calculate milliseconds until the NEXT midnight (local time).
+    // 2. We set a setTimeout for that duration.
+    // 3. When it fires, we show a notification via the Service Worker.
+    //    Using SW.showNotification (instead of new Notification()) means it
+    //    works even when the browser tab is in the background.
+    // 4. After showing, we recurse to schedule the NEXT midnight.
+    //
+    // Limitation: if the user force-quits the browser, the timer is lost.
+    // True server-push (VAPID) would survive that — but requires a backend.
+    const scheduleMidnightNotification = () => {
+        // Clear any existing timer first (prevent duplicates)
+        if (midnightTimerRef.current) clearTimeout(midnightTimerRef.current);
+
+        const now = new Date();
+        const midnight = new Date(
+            now.getFullYear(), now.getMonth(), now.getDate() + 1, // tomorrow
+            0, 0, 0, 0 // 00:00:00.000
+        );
+        const msUntilMidnight = midnight.getTime() - now.getTime();
+
+        midnightTimerRef.current = setTimeout(async () => {
+            try {
+                // Use Service Worker registration to show notification
+                // (works even when the tab is minimised)
+                const reg = await navigator.serviceWorker?.ready;
+                if (reg) {
+                    reg.showNotification('Shadow System', {
+                        body: '🗡️ Daily quests have reset. Rise, Hunter. The System awaits.',
+                        icon: '/pwa-192x192.png',
+                        badge: '/pwa-192x192.png',
+                        tag: 'daily-reset',          // replaces any previous notification with same tag
+                        renotify: true,               // vibrate even if replacing existing
+                        data: { url: window.location.origin },
+                    });
+                }
+            } catch (e) {
+                console.warn('[PWA] Notification failed:', e);
+            }
+            // Schedule again for the NEXT midnight
+            scheduleMidnightNotification();
+        }, msUntilMidnight);
+    };
+
+    // ── Request notification permission + start schedule ─────────────────────
+    const requestNotifPermission = async () => {
+        if (!('Notification' in window)) return; // unsupported browser
+        const permission = await Notification.requestPermission();
+        setNotifStatus(permission);
+        if (permission === 'granted') scheduleMidnightNotification();
+    };
+
+    // ── Auto-start scheduling if permission already granted ───────────────────
+    useEffect(() => {
+        if (notifStatus === 'granted') scheduleMidnightNotification();
+        // Cleanup: cancel the timer on unmount / logout
+        return () => { if (midnightTimerRef.current) clearTimeout(midnightTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // ── Zustand dungeon store ─────────────────────────────────────────
     // 📖 Instead of managing dungeon + timer state here in GameApp,
     // we delegate to the Zustand store. DungeonFocusOverlay reads from it directly.
@@ -436,7 +504,7 @@ export default function GameApp({ session, onLogout }) {
     ];
 
     return (
-        <div style={{ maxWidth: 1120, margin: "0 auto", padding: 20 }}>
+        <div className="game-container">
             {/* Toast */}
             {toast && (
                 <div className="overlay" onClick={() => setToast(null)}>
@@ -462,27 +530,58 @@ export default function GameApp({ session, onLogout }) {
             )}
 
             {/* Header */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, paddingBottom: 18, borderBottom: "1px solid #0d2d47", position: "relative" }}>
+            <div className="game-header">
                 <div style={{ position: "absolute", bottom: -1, left: 0, width: 200, height: 1, background: "linear-gradient(90deg,#00a8ff,transparent)", boxShadow: "0 0 8px #00a8ff" }} />
-                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div className="game-header-left">
                     <div className="clip" style={{ width: 48, height: 48, border: "1.5px solid #00a8ff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, background: "#071525", boxShadow: "0 0 20px rgba(0,168,255,0.3)", animation: "glow-pulse 3s ease-in-out infinite" }}>⚔</div>
                     <div>
                         <div style={{ fontFamily: "'Orbitron',monospace", fontSize: 11, letterSpacing: 4, color: "#00a8ff", textShadow: "0 0 10px #00a8ff" }}>SHADOW SYSTEM</div>
                         <div style={{ fontSize: 11, color: "#4a7a9b", letterSpacing: 2, marginTop: 2 }}>HUNTER INTERFACE v3.0</div>
                     </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ fontFamily: "'Orbitron',monospace", fontSize: 9, letterSpacing: 2, color: "#4a7a9b", padding: "6px 12px", border: "1px solid #0d2d47" }}>{new Date().toDateString().toUpperCase()}</div>
+                <div className="game-header-right">
+                    <div className="game-header-date" style={{ fontFamily: "'Orbitron',monospace", fontSize: 9, letterSpacing: 2, color: "#4a7a9b", padding: "6px 12px", border: "1px solid #0d2d47" }}>{new Date().toDateString().toUpperCase()}</div>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", border: "1px solid #0d2d47" }}>
                         <span style={{ fontSize: 11 }}>🔥</span>
                         <span style={{ fontFamily: "'Orbitron',monospace", fontSize: 9, color: "#ffd700" }}>{state.player.streak}D</span>
                     </div>
+                    {/* ── Notification bell button ── */}
+                    {/* Shows 🔔 when not yet granted, 🔕 when denied, glowing green when granted */}
+                    {'Notification' in window && (
+                        <button
+                            id="notif-bell-btn"
+                            title={
+                                notifStatus === 'granted' ? 'Notifications ON — daily reset alerts active'
+                              : notifStatus === 'denied'  ? 'Notifications blocked — enable in browser settings'
+                              : 'Enable daily quest reset notifications'
+                            }
+                            onClick={notifStatus === 'default' ? requestNotifPermission : undefined}
+                            style={{
+                                background: 'none',
+                                border: `1px solid ${
+                                    notifStatus === 'granted' ? 'rgba(0,255,128,0.4)'
+                                  : notifStatus === 'denied'  ? '#1e3a52'
+                                  : '#0d2d47'
+                                }`,
+                                borderRadius: 0,
+                                cursor: notifStatus === 'default' ? 'pointer' : 'default',
+                                padding: '7px 10px',
+                                fontSize: 13,
+                                lineHeight: 1,
+                                color: notifStatus === 'granted' ? '#00ff88' : '#4a7a9b',
+                                boxShadow: notifStatus === 'granted' ? '0 0 8px rgba(0,255,128,0.3)' : 'none',
+                                transition: 'all 0.3s',
+                            }}
+                        >
+                            {notifStatus === 'denied' ? '🔕' : '🔔'}
+                        </button>
+                    )}
                     <button className="btn btn-red clip-sm" style={{ fontSize: 8, padding: "7px 12px" }} onClick={onLogout}>⏻ LOGOUT</button>
                 </div>
             </div>
 
             {/* Main layout */}
-            <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 18, marginBottom: 18 }}>
+            <div className="game-layout">
 
                 {/* Player card */}
                 <div className="panel clip" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -538,7 +637,7 @@ export default function GameApp({ session, onLogout }) {
 
                 {/* Right panel */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-                    <div style={{ display: "flex", borderBottom: "1px solid #0d2d47" }}>
+                    <div className="nav-tabs-row">
                         {["quests", "dungeon", "shadows", "system", "log"].map(t => (
                             <div key={t} className={`nav-tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
                                 {t === "quests" ? "⬡ QUESTS" : t === "dungeon" ? "⚔ DUNGEON" : t === "shadows" ? "👥 SHADOWS" : t === "system" ? "🤖 AI" : "📋 LOG"}
@@ -549,7 +648,7 @@ export default function GameApp({ session, onLogout }) {
                     {/* QUESTS */}
                     {tab === "quests" && (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 16px", background: "rgba(0,168,255,0.04)", border: "1px solid #0d2d47" }}>
+                            <div className="quest-progress-row" style={{ display: "flex", alignItems: "center", gap: 16, padding: "12px 16px", background: "rgba(0,168,255,0.04)", border: "1px solid #0d2d47" }}>
                                 <div style={{ flex: 1 }}>
                                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, letterSpacing: 1.5, color: "#4a7a9b", marginBottom: 5 }}>
                                         <span style={{ fontFamily: "'Orbitron',monospace", fontSize: 9 }}>DAILY PROGRESS</span>
@@ -601,7 +700,7 @@ export default function GameApp({ session, onLogout }) {
                             ))}
                             </AnimatePresence>
 
-                            <div style={{ display: "flex", gap: 8, marginTop: 4, padding: "12px 14px", background: "rgba(0,168,255,0.02)", border: "1px dashed #0d2d47" }}>
+                            <div className="quest-add-row">
                                 <input value={newQuestName} onChange={e => setNewQuestName(e.target.value)} onKeyDown={e => e.key === "Enter" && addQuest()} placeholder="Add new quest..." style={{ flex: 1, background: "transparent", border: "1px solid #0d2d47", color: "#c8e8ff", padding: "8px 12px", fontFamily: "'Rajdhani',sans-serif", fontSize: 13, outline: "none" }} />
                                 <select value={newQuestType} onChange={e => setNewQuestType(e.target.value)} style={{ background: "#050d18", border: "1px solid #0d2d47", color: "#4a7a9b", padding: "8px", fontFamily: "'Orbitron',monospace", fontSize: 8, outline: "none" }}>
                                     <option value="bonus">BONUS</option>
@@ -638,7 +737,7 @@ export default function GameApp({ session, onLogout }) {
                                     <div style={{ fontSize: 13, marginTop: 8 }}>Maintain a 7-day quest streak to extract a shadow.</div>
                                 </div>
                             ) : (
-                                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
+                                <div className="shadows-grid">
                                     {state.shadows.map(sh => (
                                         <div key={sh.id} className="clip-sm" style={{ background: "rgba(123,47,255,0.08)", border: "1px solid rgba(123,47,255,0.3)", padding: "14px 10px", textAlign: "center", position: "relative", overflow: "hidden" }}>
                                             <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at 50% 100%,rgba(123,47,255,0.15),transparent 70%)" }} />

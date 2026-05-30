@@ -10,6 +10,18 @@
   <link rel="icon" type="image/svg+xml"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔</text></svg>" />
 
+  <!-- PWA: tints Android browser toolbar to match the dark UI -->
+  <meta name="theme-color" content="#020408" />
+
+  <!-- iOS PWA: hides Safari's URL bar + nav chrome when launched from home screen -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <!-- iOS PWA: status bar blends with the near-black background -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- iOS PWA: label shown under the icon on the home screen -->
+  <meta name="apple-mobile-web-app-title" content="Shadow System" />
+  <!-- iOS PWA: home screen icon (Safari ignores manifest icons) -->
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
   <!-- Preconnect: establish TCP+TLS early for critical external origins -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

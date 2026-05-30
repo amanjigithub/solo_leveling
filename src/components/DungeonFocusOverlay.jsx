@@ -32,10 +32,32 @@
 //
 // =============================================================================
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useDungeonStore } from "../store/useDungeonStore.js";
 import { RANKS, DUNGEONS } from "../constants.js";
+
+// ── Focus Lock helpers ────────────────────────────────────────────────────────
+
+// Request browser fullscreen on the <html> element
+const enterFullscreen = () => {
+    const el = document.documentElement;
+    if (el.requestFullscreen) return el.requestFullscreen();
+    if (el.webkitRequestFullscreen) return el.webkitRequestFullscreen(); // Safari
+    return Promise.resolve();
+};
+
+// Exit fullscreen safely
+const exitFullscreen = () => {
+    if (document.exitFullscreen && document.fullscreenElement) return document.exitFullscreen();
+    if (document.webkitExitFullscreen && document.webkitFullscreenElement) return document.webkitExitFullscreen();
+    return Promise.resolve();
+};
+
+// Vibrate helper — silently ignores unsupported browsers (iOS Safari)
+const vibrate = (pattern) => {
+    try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (_) {}
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const formatTimer = (seconds) => {
@@ -60,9 +82,6 @@ export default function DungeonFocusOverlay({
     onLogMessage,
 }) {
     // ── Read dungeon state from Zustand store ─────────────────────────────────
-    // 📖 useStore(selector) — only re-renders when the SELECTED data changes.
-    // This component doesn't re-render when player XP changes, only when
-    // dungeon state changes. That's the Zustand performance win.
     const dungeon       = useDungeonStore(s => s.dungeon);
     const dungeonTimer  = useDungeonStore(s => s.dungeonTimer);
     const openDungeon   = useDungeonStore(s => s.openDungeon);
@@ -70,28 +89,109 @@ export default function DungeonFocusOverlay({
     const completeFocus = useDungeonStore(s => s.completeFocusBlock);
     const retreat       = useDungeonStore(s => s.retreat);
 
-    // ── Enter dungeon: open gate + start first focus timer ────────────────────
-    const handleEnterDungeon = () => {
+    // ── Focus Lock state ──────────────────────────────────────────────────────
+    const wakeLockRef      = useRef(null);   // Screen Wake Lock sentinel
+    const cheatCountRef    = useRef(0);      // how many times hunter switched away
+    const [cheatBanner, setCheatBanner] = useState(null); // null | "warning" | "penalty"
+
+    // ── Acquire Screen Wake Lock ──────────────────────────────────────────────
+    // Keeps screen on during focus block. Silently fails on unsupported browsers.
+    const acquireWakeLock = async () => {
+        try {
+            if ("wakeLock" in navigator) {
+                wakeLockRef.current = await navigator.wakeLock.request("screen");
+                // Re-acquire on visibility restore (OS may release it on tab switch)
+                wakeLockRef.current.addEventListener("release", () => {
+                    if (dungeon.active) acquireWakeLock();
+                });
+            }
+        } catch (_) { /* Not supported or permission denied — ignore */ }
+    };
+
+    // ── Release Screen Wake Lock ──────────────────────────────────────────────
+    const releaseWakeLock = async () => {
+        try {
+            if (wakeLockRef.current) {
+                await wakeLockRef.current.release();
+                wakeLockRef.current = null;
+            }
+        } catch (_) {}
+    };
+
+    // ── Page Visibility — cheat detection ────────────────────────────────────
+    // Fires when hunter switches tabs, minimises browser, or goes to another app.
+    useEffect(() => {
+        if (!dungeon.active) {
+            setCheatBanner(null);
+            cheatCountRef.current = 0;
+            return;
+        }
+
+        const handleVisibility = () => {
+            if (document.hidden) {
+                cheatCountRef.current += 1;
+                if (cheatCountRef.current === 1) {
+                    setCheatBanner("warning");
+                    onLogMessage("⚠ Focus warning — hunter left the dungeon!", "system");
+                } else {
+                    setCheatBanner("penalty");
+                    onLogMessage(
+                        `⚠ Focus broken (×${cheatCountRef.current}) — The System has noted your weakness.`,
+                        "system"
+                    );
+                }
+            } else {
+                // Hunter returned — keep banner visible for 3 seconds then hide
+                setTimeout(() => setCheatBanner(null), 3000);
+            }
+        };
+
+        document.addEventListener("visibilitychange", handleVisibility);
+        return () => document.removeEventListener("visibilitychange", handleVisibility);
+    }, [dungeon.active]);
+
+    // ── Enter dungeon: Fullscreen + Wake Lock + Haptics + Timer ──────────────
+    const handleEnterDungeon = async () => {
         const dungeonConfig = DUNGEONS[Math.min(RANKS.indexOf(playerRank), DUNGEONS.length - 1)];
         openDungeon(dungeonConfig);
         onLogMessage(`Gate opened! Boss: ${dungeonConfig.boss}`, "system");
-        startTimer(); // start the 25-min countdown
+
+        // 1. Request fullscreen — browser chrome disappears
+        await enterFullscreen();
+
+        // 2. Keep screen on
+        await acquireWakeLock();
+
+        // 3. Haptic feedback — double pulse
+        vibrate([100, 50, 100]);
+
+        // 4. Start the 25-min countdown
+        startTimer();
     };
 
-    // ── Complete a focus block: deal damage to boss ───────────────────────────
+    // ── Complete a focus block: deal damage, haptics, victory check ───────────
     const handleCompleteBlock = () => {
         const { defeated, xpEarned } = completeFocus();
         if (defeated) {
+            // Victory haptics — long celebratory pattern
+            vibrate([300, 100, 300, 100, 500]);
             onLogMessage(`Boss defeated! +${xpEarned} XP! VICTORY!`, "complete");
+            // Exit fullscreen + release wake lock on victory
+            exitFullscreen();
+            releaseWakeLock();
         } else {
+            vibrate([150]);
             onLogMessage(`Focus block complete! +${xpEarned} XP. Boss damaged!`, "info");
         }
-        onBlockComplete(xpEarned, defeated); // tell GameApp to update player XP
+        onBlockComplete(xpEarned, defeated);
     };
 
-    // ── Retreat: give up ──────────────────────────────────────────────────────
+    // ── Retreat: exit fullscreen + release wake lock + haptic ────────────────
     const handleRetreat = () => {
         retreat();
+        exitFullscreen();
+        releaseWakeLock();
+        vibrate([200]);
         onLogMessage("Retreated from dungeon.", "system");
     };
 
@@ -118,6 +218,36 @@ export default function DungeonFocusOverlay({
     return (
         <div className="panel clip" style={{ flex: 1 }}>
             <div className="panel-title">⚔ DUNGEON GATE — {playerRank}-RANK</div>
+
+            {/* ── Cheat detection banner ── */}
+            <AnimatePresence>
+                {cheatBanner && (
+                    <motion.div
+                        key={cheatBanner}
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        transition={{ duration: 0.2 }}
+                        style={{
+                            padding: "10px 14px",
+                            marginBottom: 12,
+                            background: cheatBanner === "warning"
+                                ? "rgba(255,152,0,0.12)"
+                                : "rgba(255,34,68,0.12)",
+                            border: `1px solid ${cheatBanner === "warning" ? "#FF9800" : "#ff2244"}`,
+                            color: cheatBanner === "warning" ? "#FF9800" : "#ff2244",
+                            fontFamily: "'Orbitron',monospace",
+                            fontSize: 9,
+                            letterSpacing: 2,
+                            textAlign: "center",
+                        }}
+                    >
+                        {cheatBanner === "warning"
+                            ? "⚠ FOCUS WARNING — RETURN TO THE DUNGEON, HUNTER"
+                            : `⚠ FOCUS BROKEN (×${cheatCountRef.current}) — THE SYSTEM HAS NOTED YOUR WEAKNESS`}
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <AnimatePresence mode="wait">
                 {!dungeon.active ? (
@@ -227,6 +357,7 @@ export default function DungeonFocusOverlay({
                                 >
                                     {/* Pulsing timer display */}
                                     <motion.div
+                                        className="dungeon-timer"
                                         animate={{ opacity: [1, 0.7, 1] }}
                                         transition={{ duration: 2, repeat: Infinity }}
                                         style={{

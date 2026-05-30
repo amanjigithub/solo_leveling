@@ -208,3 +208,149 @@ body { background: #020408; color: #c8e8ff; font-family: 'Rajdhani', sans-serif;
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: #050d18; }
 ::-webkit-scrollbar-thumb { background: #0d2d47; }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   RESPONSIVE LAYOUT
+   Breakpoints:
+     tablet  → max-width: 900px  (iPad, small laptops)
+     mobile  → max-width: 600px  (phones)
+     xs      → max-width: 400px  (small phones)
+══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Layout containers ─────────────────────────────────────────── */
+.game-container {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* ── Main 2-column grid (sidebar + content) ────────────────────── */
+.game-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+/* ── Nav tabs row ──────────────────────────────────────────────── */
+.nav-tabs-row {
+  display: flex;
+  border-bottom: 1px solid #0d2d47;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
+}
+.nav-tabs-row::-webkit-scrollbar { display: none; }
+.nav-tabs-row .nav-tab { white-space: nowrap; flex-shrink: 0; }
+
+/* ── Shadows grid ──────────────────────────────────────────────── */
+.shadows-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+/* ── Game header ───────────────────────────────────────────────── */
+.game-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #0d2d47;
+  position: relative;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.game-header-left  { display: flex; align-items: center; gap: 14px; }
+.game-header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ── Quest add row ─────────────────────────────────────────────── */
+.quest-add-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 12px 14px;
+  background: rgba(0,168,255,0.02);
+  border: 1px dashed #0d2d47;
+  flex-wrap: wrap;
+}
+.quest-add-row input  { flex: 1; min-width: 120px; }
+.quest-add-row select { flex-shrink: 0; }
+
+/* ── Toast responsive ──────────────────────────────────────────── */
+.toast { padding: 40px 60px; }
+
+/* ══════════════════════════════════════════════════════════════════
+   TABLET  ≤ 900px
+══════════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  .game-layout {
+    grid-template-columns: 1fr;  /* sidebar stacks above content */
+  }
+
+  .shadows-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .game-container { padding: 14px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   MOBILE  ≤ 600px
+══════════════════════════════════════════════════════════════════ */
+@media (max-width: 600px) {
+  /* Container */
+  .game-container { padding: 10px; }
+
+  /* Header: stack logo and controls */
+  .game-header { flex-direction: column; align-items: flex-start; }
+  .game-header-right { width: 100%; justify-content: space-between; }
+
+  /* Hide date on mobile to save space */
+  .game-header-date { display: none; }
+
+  /* Shadows: 2 columns */
+  .shadows-grid { grid-template-columns: repeat(2, 1fr); }
+
+  /* Toast: smaller padding */
+  .toast {
+    padding: 28px 20px;
+    margin: 0 10px;
+  }
+  .toast-rank-number { font-size: 56px !important; }
+
+  /* Auth card: tighter padding on small phones */
+  .auth-card { padding: 28px 20px; }
+
+  /* Nav tabs: smaller text */
+  .nav-tab { font-size: 7px; padding: 10px 10px; }
+
+  /* Quest add row: stack inputs */
+  .quest-add-row { flex-direction: column; }
+  .quest-add-row input,
+  .quest-add-row select,
+  .quest-add-row button { width: 100%; }
+
+  /* Panel: reduce padding */
+  .panel { padding: 14px; }
+
+  /* Dungeon timer: smaller font */
+  .dungeon-timer { font-size: 36px !important; }
+
+  /* Progress bar header row */
+  .quest-progress-row { flex-direction: column; gap: 10px; align-items: stretch !important; }
+  .quest-progress-row button { width: 100%; }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   XS  ≤ 400px  (very small phones)
+══════════════════════════════════════════════════════════════════ */
+@media (max-width: 400px) {
+  .game-container { padding: 8px; }
+  .auth-card { padding: 20px 14px; }
+  .auth-logo h1 { font-size: 13px; letter-spacing: 3px; }
+  .shadows-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .btn-submit { font-size: 9px; letter-spacing: 2px; }
+  .nav-tab { padding: 8px 8px; font-size: 6px; }
+}
