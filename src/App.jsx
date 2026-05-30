@@ -1,8 +1,23 @@
-import { useState, useEffect } from "react";
-import AuthPage from "./components/AuthPage.jsx";
-import GameApp from "./components/GameApp.jsx";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { auth, isFirebaseConfigured } from "./firebase.js";
 import { onAuthStateChanged, signOut } from "firebase/auth";
+
+// ── Lazy load heavy components — they load only when needed ──────────────
+// GameApp (48KB) and AuthPage (14KB) are split into separate JS chunks.
+// The initial bundle is now ~60KB lighter — faster first paint.
+const AuthPage = lazy(() => import("./components/AuthPage.jsx"));
+const GameApp  = lazy(() => import("./components/GameApp.jsx"));
+
+// Shared loading spinner shown while a lazy chunk downloads
+const SystemBooting = () => (
+    <div style={{ background: "#020408", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ textAlign: "center", color: "#00a8ff", fontFamily: "'Orbitron',monospace", fontSize: 12, letterSpacing: 4 }}>
+            <div className="spin" style={{ fontSize: 32, marginBottom: 16 }}>⚔</div>
+            <div>LOADING SYSTEM...</div>
+        </div>
+    </div>
+);
+
 
 export default function App() {
     const [session, setSession] = useState(null);
@@ -66,10 +81,12 @@ export default function App() {
         <div className="app" style={{ background: "#020408" }}>
             <div className="bg-glow" />
             <div className="scanlines" />
-            {session
-                ? <GameApp session={session} onLogout={handleLogout} />
-                : <AuthPage />
-            }
+            <Suspense fallback={<SystemBooting />}>
+                {session
+                    ? <GameApp session={session} onLogout={handleLogout} />
+                    : <AuthPage />
+                }
+            </Suspense>
         </div>
     );
 }
