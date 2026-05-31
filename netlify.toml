@@ -1,8 +1,20 @@
 [build]
   publish = "dist"
-  command = "npm run build"
+  # No build command — Netlify serves the pre-built dist/ from git directly.
+  # Firebase keys are baked into the local build. Run `npm run build` locally
+  # and commit dist/ before pushing to deploy updates.
 
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Cache-Control = "no-cache"
