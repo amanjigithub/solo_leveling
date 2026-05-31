@@ -3,54 +3,41 @@ import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore, doc, setDoc, onSnapshot } from "firebase/firestore";
 
 // ==========================================
-// 📖 WHY ARE FIREBASE KEYS HARD-CODED HERE?
+// 📖 HOW ENVIRONMENT VARIABLES WORK
 //
-// Firebase API keys are NOT secrets.
-// They are public identifiers — like a street address.
-// They tell Firebase WHICH project to connect to.
+// On YOUR machine:
+//   Vite reads the .env file → replaces import.meta.env.VITE_* with real values
 //
-// Real security comes from Firestore Security Rules (in Firebase console),
-// which control WHO can read/write your data regardless of the key.
+// On NETLIFY's server:
+//   Netlify reads its Dashboard (Site → Environment Variables) → same replacement
 //
-// The problem: Netlify runs `npm run build` on their servers.
-// Their server has no .env file → all VITE_* vars become undefined →
-// isFirebaseConfigured = false → "SYSTEM OFFLINE" error.
-//
-// Solution: embed the values directly so the build always works,
-// on any machine, on any server, with zero setup.
+// On GITHUB (public):
+//   .env is in .gitignore → never uploaded → keys stay secret ✅
 //
 // 📖 WHAT IS import.meta.env?
-// Vite replaces import.meta.env.VITE_* at BUILD TIME with the actual value.
-// It's not read at runtime — it's literally replaced in the JS file during build.
-// When the value is undefined (no .env), the bundle gets: apiKey: undefined
-// That's why the app breaks on Netlify.
+//   Vite replaces import.meta.env.VITE_* AT BUILD TIME with the actual string.
+//   The final JS bundle has the real value baked in — not a variable lookup.
+//   Example: import.meta.env.VITE_FIREBASE_API_KEY → "AIzaSyDz3f..."
 // ==========================================
 
 const firebaseConfig = {
-    // 📖 These values identify your Firebase project.
-    // They are the same values you'd put in .env — just written directly.
-    apiKey:            "AIzaSyDz3fKmV_gJrZ7bTJh--2LyvjKoPHD1STs",
-    authDomain:        "shadow-system-d5f7f.firebaseapp.com",
-    projectId:         "shadow-system-d5f7f",
-    storageBucket:     "shadow-system-d5f7f.firebasestorage.app",
-    messagingSenderId: "53245691961",
-    appId:             "1:53245691961:web:6d314c52ee7698a9e1a5e8",
-    measurementId:     "G-RLBZ8NDB1V",
+    apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId:             import.meta.env.VITE_FIREBASE_APP_ID,
+    measurementId:     import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-// All keys are now hardcoded strings — this will always be true.
-// We keep the check so the error screen still shows if someone
-// accidentally deletes the values above.
+// Guard: if .env is missing or keys are empty, show a helpful error screen
+// instead of crashing with a cryptic Firebase error.
 const REQUIRED_KEYS = ["apiKey", "authDomain", "projectId", "storageBucket", "messagingSenderId", "appId"];
 export const isFirebaseConfigured = REQUIRED_KEYS.every((key) => {
     const val = firebaseConfig[key];
     return val && typeof val === "string" && val.trim() !== "" && !val.startsWith("YOUR_");
 });
 
-// 📖 initializeApp() connects your app to Firebase.
-// getAuth() sets up the authentication system.
-// getFirestore() gives you a handle to the database.
-// These are only created if config is valid (safety guard).
 let app, auth, googleProvider, db;
 
 if (isFirebaseConfigured) {
@@ -61,3 +48,4 @@ if (isFirebaseConfigured) {
 }
 
 export { app, auth, googleProvider, db, doc, setDoc, onSnapshot };
+
