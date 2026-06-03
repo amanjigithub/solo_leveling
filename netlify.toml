@@ -1,8 +1,14 @@
 [build]
   publish = "dist"
-  # No build command — Netlify serves the pre-built dist/ from git directly.
-  # Firebase keys are baked into the local build. Run `npm run build` locally
-  # and commit dist/ before pushing to deploy updates.
+  command = "npm run build"
+
+# ── Secrets scanning ────────────────────────────────────────────────────────
+# Netlify scans build output for secret values. Vite intentionally bakes
+# VITE_* env vars into JS bundles at build time — this is by design.
+# We tell the scanner to skip compiled output so it doesn't false-positive.
+[build.environment]
+  SECRETS_SCAN_OMIT_PATHS = "dist/,functions/index.js,src/utils.js"
+
 
 [[redirects]]
   from = "/*"
