@@ -343,14 +343,6 @@ export default function GameApp({ session, onLogout }) {
         update(prev => addLog(prev, msg, type));
     };
 
-    // Keep main state.dungeon in sync with the Zustand store when user interacts
-    // We subscribe to dungeon store changes and write them back to state for Firestore save
-    const dungeonFromStore = useDungeonStore(s => s.dungeon);
-    useEffect(() => {
-        if (!state) return;
-        // Only sync back to state (for Firestore save) if dungeon actually changed
-        const currentDungeon = state.dungeon;
-        const storeDungeon = dungeonFromStore;
         if (JSON.stringify(currentDungeon) !== JSON.stringify(storeDungeon)) {
             update(prev => ({ ...prev, dungeon: storeDungeon }));
         }
@@ -366,7 +358,7 @@ export default function GameApp({ session, onLogout }) {
     // Strategy 1: Find a [...] array directly
     // Strategy 2: Strip markdown code fences (```json ... ```) then parse
     // Strategy 3: Find the first [ to the last ] in the whole string
-    // If ALL strategies fail, it throws a clear error instead of a cryptic crash.
+    // Strategy 4: Synthesize quests from plain text response (fallback)
     const extractQuestJSON = (raw) => {
         // Strategy 1: Find a clean [...] array block
         const arrMatch = raw.match(/\[[\s\S]*?\]/);
@@ -387,6 +379,67 @@ export default function GameApp({ session, onLogout }) {
             try { return JSON.parse(raw.slice(start, end + 1)); } catch (_) { /* try next */ }
         }
 
+        // 📖 Strategy 4: AI returned plain text (free models often do this).
+        // We scan the text for numbered lines or bullet points and build
+        // quest objects from the words we find. It's not perfect but works
+        // much better than showing an error.
+        //
+        // Example AI text it can handle:
+        //   "1. Complete 2 coding problems on LeetCode (INT)"
+        //   "• Study for 1 hour - Vitality boost"
+        //   "- Go to the gym for 30 minutes"
+        const lines = raw.split(/\n/).map(l => l.trim()).filter(Boolean);
+        const questLines = lines.filter(l =>
+            /^[\d•\-\*>]+/.test(l) ||      // starts with number, bullet, dash
+            l.toLowerCase().includes("quest") ||
+            l.toLowerCase().includes("complete") ||
+            l.toLowerCase().includes("study") ||
+            l.toLowerCase().includes("exercise") ||
+            l.toLowerCase().includes("practice")
+        );
+
+        if (questLines.length >= 1) {
+            // Map stat keywords to stat codes
+            const statMap = [
+                { keys: ["study","read","learn","code","leetcode","assignment","exam","math","problem","mental","book","research"], stat: "INT" },
+                { keys: ["gym","exercise","workout","run","push","lift","physical","training","strength"], stat: "STR" },
+                { keys: ["sleep","diet","health","eat","meal","rest","vitamin","water","hydrat"], stat: "VIT" },
+                { keys: ["walk","jog","cycle","sprint","speed","agil","stretch","yoga","move"], stat: "AGI" },
+                { keys: ["meditat","focus","breath","mindful","sense","reflect","journal"], stat: "SEN" },
+            ];
+            const emojiMap = { STR: "💪", INT: "📚", VIT: "❤️", AGI: "⚡", SEN: "🎯" };
+
+            const getStat = (text) => {
+                const lower = text.toLowerCase();
+                for (const { keys, stat } of statMap) {
+                    if (keys.some(k => lower.includes(k))) return stat;
+                }
+                return "INT"; // default for students
+            };
+
+            // Clean up the line: remove numbering / bullets at the start
+            const cleanName = (l) => l.replace(/^[\d\.\)•\-\*>]+\s*/, "").replace(/\(.*?\)/g, "").trim();
+
+            const syntheticQuests = questLines.slice(0, 3).map((line, i) => ({
+                name: cleanName(line) || `Quest ${i + 1}`,
+                type: i === 0 ? "mandatory" : "bonus",
+                stat: getStat(line),
+                emoji: emojiMap[getStat(line)] || "⭐",
+            }));
+
+            // Pad to 3 quests if AI only gave us 1-2 lines
+            while (syntheticQuests.length < 3) {
+                const fallbacks = [
+                    { name: "Complete one focused study session", type: "mandatory", stat: "INT", emoji: "📚" },
+                    { name: "30 minutes of physical activity", type: "bonus",     stat: "STR", emoji: "💪" },
+                    { name: "10 minutes of mindful reflection", type: "bonus",     stat: "SEN", emoji: "🎯" },
+                ];
+                syntheticQuests.push(fallbacks[syntheticQuests.length]);
+            }
+
+            return syntheticQuests;
+        }
+
         // All strategies failed — AI returned plain text, not JSON
         // Throw a friendly error that explains what happened
         throw new Error(
@@ -396,19 +449,21 @@ export default function GameApp({ session, onLogout }) {
     };
 
     // Strict JSON-only prompt used as a RETRY if the first attempt fails
-    // It's more aggressive — no room for the AI to talk back
-    const STRICT_QUEST_PROMPT = `Return ONLY a raw JSON array. No text before or after. No markdown. No explanation. Exactly this format: [{"name":"...","type":"mandatory","stat":"STR","emoji":"⚔"}]. Any other output is invalid. Three items.`;
+    // Strict JSON-only prompt — more aggressive, no room for the AI to talk back
+    const STRICT_QUEST_PROMPT = `Return ONLY a raw JSON array. No text before or after. No markdown. No explanation. DO NOT say anything. ONLY output: [{"name":"...","type":"mandatory","stat":"STR","emoji":"⚔"}]. Any other output is WRONG. Three items.`;
 
     const askSystem = async () => {
         if (!chatInput.trim() || aiLoading || !state) return;
         const q = chatInput.trim(); setChatInput(""); setAiLoading(true);
 
-        // ── Intent detection: does the user want quests added? ──────────
-        const wantsQuests = /add quest|generate quest|create quest|suggest quest|give me quest|quests for me|quests (based on|according to|for a|as a)|i('m| am) (a |an )?.*(student|developer|engineer|athlete|designer|writer|gamer)/i.test(q);
+        // ── Intent detection: does the user want quests generated? ──────
+        // Catches: "I'm a btech student", "I am a developer", "create quests",
+        //          "quests according to me", "set quests", "suggest quests", etc.
+        const wantsQuests = /add quest|generate quest|create quest|suggest quest|give me quest|quests for me|set quest|make quest|quests? (based on|according to|for a|as a|suited|related)|i('m| am) (a |an )?.*(student|developer|engineer|athlete|designer|writer|gamer|btech|mtech|coder|programmer|doctor|artist|musician|teacher)|my background|personali[sz]/i.test(q);
 
         if (wantsQuests) {
             // Generate personalized quests based on user's context, then actually add them
-            const questPmt = `You are the System from Solo Leveling. The hunter described themselves: "${q}". Based on their background, generate exactly 3 highly personalized daily quests. Return ONLY a valid JSON array, no markdown, no explanation: [{"name":"specific quest name","type":"mandatory|bonus","stat":"STR|INT|VIT|AGI|SEN","emoji":"single emoji"}]. Stat guide: STR=physical/gym, INT=study/coding/mental, VIT=health/sleep/diet, AGI=movement/speed, SEN=focus/meditation. Make quests concrete, actionable, and tailored to their background.`;
+            const questPmt = `You are the System from Solo Leveling. The hunter described themselves: "${q}". Generate exactly 3 highly personalized daily quests for them. DO NOT write any explanation, greeting, or text. DO NOT use markdown. ONLY output a valid JSON array, nothing else: [{"name":"specific quest name","type":"mandatory|bonus","stat":"STR|INT|VIT|AGI|SEN","emoji":"single emoji"}]. Stat guide: STR=physical/gym, INT=study/coding/mental, VIT=health/sleep/diet, AGI=movement/speed, SEN=focus/meditation. Quests must be concrete, actionable, and tailored to their background. First quest is mandatory, rest are bonus.`;
             try {
                 // 📖 ATTEMPT 1: Ask the AI normally
                 const raw = await callClaude([{ role: "user", content: q }], questPmt);
