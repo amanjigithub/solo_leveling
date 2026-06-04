@@ -1,9 +1,10 @@
 [build]
   publish = "dist"
-  # NO build command — Netlify serves our pre-built dist/ from git directly.
-  # We build locally (npm run build) with our .env keys, then commit dist/.
-  # This avoids: secrets scanner failures, missing env vars, version mismatches.
-  # Workflow: npm run build → git add dist/ → git commit → git push → done.
+  command = ""
+  # command="" explicitly tells Netlify: NO BUILD — serve dist/ from git as-is.
+  # Without this explicit empty string, Netlify falls back to the dashboard setting
+  # (npm run build), which causes secrets scanner failures and version mismatches.
+  # Workflow: npm run build locally → commit dist/ → git push → Netlify hosts files.
 
 
 
