@@ -1,11 +1,14 @@
 [build]
   publish = "dist"
-  command = ""
-  # command="" explicitly tells Netlify: NO BUILD — serve dist/ from git as-is.
-  # Without this explicit empty string, Netlify falls back to the dashboard setting
-  # (npm run build), which causes secrets scanner failures and version mismatches.
-  # Workflow: npm run build locally → commit dist/ → git push → Netlify hosts files.
+  command = "npm run build"
 
+# ── Secrets scanning config ──────────────────────────────────────────────────
+# Netlify's secrets scanner detects env var values in built files and fails
+# the build. Vite intentionally bakes VITE_* values into JS bundles — that's
+# how it works. We tell the scanner to skip the assets folder.
+# Without this, Netlify falls back to the last successful build (stale code).
+[build.environment]
+  SECRETS_SCAN_OMIT_PATHS = "dist/assets"
 
 
 [[redirects]]
