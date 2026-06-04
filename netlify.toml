@@ -1,13 +1,10 @@
 [build]
   publish = "dist"
-  command = "npm run build"
+  # NO build command — Netlify serves our pre-built dist/ from git directly.
+  # We build locally (npm run build) with our .env keys, then commit dist/.
+  # This avoids: secrets scanner failures, missing env vars, version mismatches.
+  # Workflow: npm run build → git add dist/ → git commit → git push → done.
 
-# ── Secrets scanning ────────────────────────────────────────────────────────
-# Netlify scans build output for secret values. Vite intentionally bakes
-# VITE_* env vars into JS bundles at build time — this is by design.
-# We tell the scanner to skip compiled output so it doesn't false-positive.
-[build.environment]
-  SECRETS_SCAN_OMIT_PATHS = "dist/,functions/index.js,src/utils.js"
 
 
 [[redirects]]
