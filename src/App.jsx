@@ -41,10 +41,18 @@ export default function App() {
 
     const handleLogout = async () => {
         if (isFirebaseConfigured) {
+            // 📖 Set checking=true BEFORE signing out.
+            // This shows the "CONNECTING..." spinner immediately on click.
+            // Without this: session becomes null → React tries to render <AuthPage />
+            // → Suspense shows blank while the JS chunk downloads → black screen flash.
+            // With this: spinner shows → auth state resolves → AuthPage renders cleanly.
+            setChecking(true);
             try {
                 await signOut(auth);
+                // onAuthStateChanged will fire with null → sets session=null, checking=false
             } catch (e) {
                 console.error("Logout failed:", e);
+                setChecking(false); // recover from error — don't stay stuck on spinner
             }
         }
     };
