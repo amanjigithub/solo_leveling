@@ -2,13 +2,13 @@
   publish = "dist"
   command = "npm run build"
 
-# ── Secrets scanning config ──────────────────────────────────────────────────
-# Netlify's secrets scanner detects env var values in built files and fails
-# the build. Vite intentionally bakes VITE_* values into JS bundles — that's
-# how it works. We tell the scanner to skip the assets folder.
-# Without this, Netlify falls back to the last successful build (stale code).
+# ── Secrets scanning ─────────────────────────────────────────────────────────
+# Netlify scans the entire repo + build output for env var values.
+# Our VITE_* keys appear in: built JS bundles, .firebaserc, functions/,
+# src/utils.js, and docs — all intentionally. We tell Netlify which specific
+# key NAMES are safe to find anywhere, so the build no longer fails.
 [build.environment]
-  SECRETS_SCAN_OMIT_PATHS = "dist/assets"
+  SECRETS_SCAN_OMIT_KEYS = "VITE_FIREBASE_API_KEY,VITE_FIREBASE_AUTH_DOMAIN,VITE_FIREBASE_PROJECT_ID,VITE_FIREBASE_STORAGE_BUCKET,VITE_FIREBASE_MESSAGING_SENDER_ID,VITE_FIREBASE_APP_ID,VITE_FIREBASE_MEASUREMENT_ID,VITE_OPENROUTER_API_KEY,VITE_OPENROUTER_MODEL"
 
 
 [[redirects]]
