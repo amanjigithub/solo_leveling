@@ -343,12 +343,6 @@ export default function GameApp({ session, onLogout }) {
         update(prev => addLog(prev, msg, type));
     };
 
-        if (JSON.stringify(currentDungeon) !== JSON.stringify(storeDungeon)) {
-            update(prev => ({ ...prev, dungeon: storeDungeon }));
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [dungeonFromStore]);
-
     // ── JSON extraction helper ────────────────────────────────────────────────
     // 📖 WHY THIS EXISTS:
     // Free AI models sometimes ignore "return ONLY JSON" instructions.
