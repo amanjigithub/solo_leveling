@@ -333,7 +333,10 @@ export default function GameApp({ session, onLogout }) {
             let s = { ...prev };
             s.player = { ...s.player, xp: s.player.xp + xpEarned };
             if (defeated) {
-                setTimeout(() => setToast({ type: "dungeon", data: prev.dungeon?.bossName || "Boss" }), 100);
+                // 📖 FIX: Read bossName from the Zustand store directly instead of
+                // prev.dungeon?.bossName (which is stale React state from last Firestore sync).
+                const liveBossName = useDungeonStore.getState().dungeon.bossName || "Boss";
+                setTimeout(() => setToast({ type: "dungeon", data: liveBossName }), 100);
             }
             return s;
         });

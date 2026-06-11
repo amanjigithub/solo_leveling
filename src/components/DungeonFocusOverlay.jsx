@@ -82,12 +82,13 @@ export default function DungeonFocusOverlay({
     onLogMessage,
 }) {
     // ── Read dungeon state from Zustand store ─────────────────────────────────
-    const dungeon       = useDungeonStore(s => s.dungeon);
-    const dungeonTimer  = useDungeonStore(s => s.dungeonTimer);
-    const openDungeon   = useDungeonStore(s => s.openDungeon);
-    const startTimer    = useDungeonStore(s => s.startTimer);
-    const completeFocus = useDungeonStore(s => s.completeFocusBlock);
-    const retreat       = useDungeonStore(s => s.retreat);
+    const dungeon                = useDungeonStore(s => s.dungeon);
+    const dungeonTimer           = useDungeonStore(s => s.dungeonTimer);
+    const openDungeon            = useDungeonStore(s => s.openDungeon);
+    const startTimer             = useDungeonStore(s => s.startTimer);
+    const completeFocus          = useDungeonStore(s => s.completeFocusBlock);
+    const retreat                = useDungeonStore(s => s.retreat);
+    const setAutoCompleteCallback = useDungeonStore(s => s.setAutoCompleteCallback);
 
     // ── Focus Lock state ──────────────────────────────────────────────────────
     const wakeLockRef      = useRef(null);   // Screen Wake Lock sentinel
@@ -150,9 +151,37 @@ export default function DungeonFocusOverlay({
         return () => document.removeEventListener("visibilitychange", handleVisibility);
     }, [dungeon.active]);
 
+    // ── Register auto-complete callback so timer-expiry awards XP ─────────────
+    // 📖 FIX: When the 25-min timer hits zero inside the Zustand store, it needs
+    // to call handleCompleteBlock so XP is awarded and victory effects play.
+    // We register handleCompleteBlock as a callback on mount and clear it on unmount.
+    useEffect(() => {
+        // handleCompleteBlock is defined below — we use a ref-wrapper so the
+        // store always calls the latest version (no stale closure issues).
+        const autoCompleteRef = ({ defeated, xpEarned }) => {
+            // Mirror the same logic as pressing the COMPLETE BLOCK button
+            if (defeated) {
+                vibrate([300, 100, 300, 100, 500]);
+                onLogMessage(`Boss defeated! +${xpEarned} XP! VICTORY!`, "complete");
+                exitFullscreen();
+                releaseWakeLock();
+            } else {
+                vibrate([150]);
+                onLogMessage(`Focus block complete! +${xpEarned} XP. Boss damaged!`, "info");
+            }
+            onBlockComplete(xpEarned, defeated);
+        };
+        setAutoCompleteCallback(autoCompleteRef);
+        return () => setAutoCompleteCallback(null); // cleanup on unmount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // ── Enter dungeon: Fullscreen + Wake Lock + Haptics + Timer ──────────────
     const handleEnterDungeon = async () => {
-        const dungeonConfig = DUNGEONS[Math.min(RANKS.indexOf(playerRank), DUNGEONS.length - 1)];
+        // 📖 FIX: Guard against rank not found in list (indexOf returns -1)
+        const rankIdx = RANKS.indexOf(playerRank);
+        const safeIdx = rankIdx < 0 ? 0 : Math.min(rankIdx, DUNGEONS.length - 1);
+        const dungeonConfig = DUNGEONS[safeIdx];
         openDungeon(dungeonConfig);
         onLogMessage(`Gate opened! Boss: ${dungeonConfig.boss}`, "system");
 

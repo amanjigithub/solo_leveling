@@ -35,7 +35,19 @@ export const useDungeonStore = create((set, get) => ({
     dungeonTimer: null,
     _timerInterval: null, // private — stores the setInterval reference
 
+    // 📖 AUTO-COMPLETE CALLBACK
+    // When the 25-min timer hits zero, the store calls this registered function
+    // so the overlay can award XP and fire victory effects.
+    // DungeonFocusOverlay registers this via setAutoCompleteCallback().
+    _onAutoComplete: null,
+
     // ── Actions ───────────────────────────────────────────────────────────
+
+    /**
+     * Register the callback to invoke when timer hits zero.
+     * Called by DungeonFocusOverlay on mount.
+     */
+    setAutoCompleteCallback: (cb) => set({ _onAutoComplete: cb }),
 
     /**
      * Set dungeon state from Firestore data
@@ -61,17 +73,24 @@ export const useDungeonStore = create((set, get) => ({
      * Start the 25-minute focus timer
      */
     startTimer: () => {
-        const { _timerInterval, dungeonTimer } = get();
+        const { _timerInterval } = get();
 
         // Clear any existing timer first
         if (_timerInterval) clearInterval(_timerInterval);
 
         const interval = setInterval(() => {
-            const { dungeonTimer: currentTime, completeFocusBlock } = get();
+            const { dungeonTimer: currentTime } = get();
             if (currentTime === null || currentTime <= 0) {
+                // Timer hit zero — stop the interval
                 clearInterval(get()._timerInterval);
                 set({ _timerInterval: null, dungeonTimer: null });
-                completeFocusBlock(); // Auto-complete when timer hits zero
+
+                // 📖 FIX: Call completeFocusBlock and pass the result back to the
+                // overlay via the registered callback. Without this, XP was never
+                // awarded when the 25-min timer ran out naturally.
+                const { completeFocusBlock, _onAutoComplete } = get();
+                const result = completeFocusBlock();
+                if (_onAutoComplete) _onAutoComplete(result);
                 return;
             }
             set({ dungeonTimer: currentTime - 1 });
@@ -131,6 +150,7 @@ export const useDungeonStore = create((set, get) => ({
             dungeon: { active: false, bossName: "", bossEmoji: "", bossHpMax: 100, bossHp: 100, blocks: 0, blocksNeeded: 4 },
             dungeonTimer: null,
             _timerInterval: null,
+            _onAutoComplete: null,
         });
     },
 }));
