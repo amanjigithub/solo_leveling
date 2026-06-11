@@ -179,8 +179,14 @@ export default function GameApp({ session, onLogout }) {
                             // ── Sync dungeon state into Zustand store ──────────────────
                             // 📖 DungeonFocusOverlay reads from useDungeonStore, not from state.
                             // So when Firestore data loads, we push dungeon data into the store.
-                            // This keeps the store and Firestore in sync automatically.
-                            if (loaded.dungeon) setDungeonFromStore(loaded.dungeon);
+                            //
+                            // ⚠️ BUG FIX: Only sync if NO dungeon session is currently active.
+                            // Without this guard, every Firestore snapshot (triggered by log
+                            // writes) would reset dungeon.active back to false — closing the
+                            // gate immediately after it opens!
+                            if (loaded.dungeon && !useDungeonStore.getState().dungeon.active) {
+                                setDungeonFromStore(loaded.dungeon);
+                            }
                             return loaded;
                         }
                         return prev;
