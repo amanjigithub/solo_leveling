@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { STORAGE_KEY, RANKS, RANK_COLORS, TITLES, DEFAULT_GAME_STATE } from "../constants.js";
-import { callClaude } from "../utils.js";
+import { callClaude, themedAIError } from "../utils.js";
 import { doc, setDoc, onSnapshot } from "../firebase.js";
 import { db } from "../firebase.js";
 import { motion, AnimatePresence } from "framer-motion";
@@ -96,6 +96,31 @@ export default function GameApp({ session, onLogout }) {
         if (permission === 'granted') scheduleMidnightNotification();
     };
 
+    // ── Zustand dungeon store ─────────────────────────────────────────────────
+    // 📖 Instead of managing dungeon + timer state here in GameApp,
+    // we delegate to the Zustand store. DungeonFocusOverlay reads from it directly.
+    // This means the 1-second timer tick NO LONGER causes GameApp to re-render!
+    const setDungeonFromStore  = useDungeonStore(s => s.setDungeon);
+    const restoreTimerFromStore = useDungeonStore(s => s.restoreTimer);
+
+    // 📖 B-01 FIX: Watch dungeonStartedAt in the store.
+    // Whenever the user starts a focus block, startedAt becomes a timestamp.
+    // We immediately persist it to Firestore (via the normal `save` path) so
+    // that a page refresh can reconstruct the remaining timer from it.
+    const dungeonStartedAt = useDungeonStore(s => s.dungeonStartedAt);
+    useEffect(() => {
+        if (!state) return;
+        // Only write when value actually changed to avoid spurious saves
+        const firestoreValue = state.dungeon?.dungeonStartedAt ?? null;
+        if (dungeonStartedAt !== firestoreValue) {
+            update(prev => ({
+                ...prev,
+                dungeon: { ...prev.dungeon, dungeonStartedAt },
+            }));
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dungeonStartedAt]);
+
     // ── Auto-start scheduling if permission already granted ───────────────────
     useEffect(() => {
         if (notifStatus === 'granted') scheduleMidnightNotification();
@@ -103,12 +128,6 @@ export default function GameApp({ session, onLogout }) {
         return () => { if (midnightTimerRef.current) clearTimeout(midnightTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-
-    // ── Zustand dungeon store ─────────────────────────────────────────
-    // 📖 Instead of managing dungeon + timer state here in GameApp,
-    // we delegate to the Zustand store. DungeonFocusOverlay reads from it directly.
-    // This means the 1-second timer tick NO LONGER causes GameApp to re-render!
-    const setDungeonFromStore = useDungeonStore(s => s.setDungeon);
 
     const SK = STORAGE_KEY(session.uid);
 
@@ -186,6 +205,15 @@ export default function GameApp({ session, onLogout }) {
                             // gate immediately after it opens!
                             if (loaded.dungeon && !useDungeonStore.getState().dungeon.active) {
                                 setDungeonFromStore(loaded.dungeon);
+
+                                // 📖 B-01 FIX: If a timer block was active when the user
+                                // last closed the tab, dungeonStartedAt will be a saved timestamp.
+                                // Reconstruct the countdown from elapsed wall-clock time so the
+                                // timer picks up exactly where it left off after a refresh.
+                                const savedStartedAt = loaded.dungeon?.dungeonStartedAt;
+                                if (loaded.dungeon.active && savedStartedAt) {
+                                    restoreTimerFromStore(savedStartedAt);
+                                }
                             }
                             return loaded;
                         }
@@ -503,8 +531,7 @@ export default function GameApp({ session, onLogout }) {
                 setAiChat({ question: q, answer: `[SYSTEM] Hunter profile analyzed. ${quests.length} custom quests deployed to your quest log. The System has spoken — now arise and complete them.` });
             } catch (err) {
                 console.error("[AI] Quest generation error:", err);
-                // 📖 Show the friendly error message, not the raw JS error
-                setAiChat({ question: q, answer: `[SYSTEM ERROR] ${err.message || "Quest generation failed. Try again."}` });
+                setAiChat({ question: q, answer: themedAIError(err) });
             }
         } else {
             // Regular motivational chat
@@ -514,7 +541,7 @@ export default function GameApp({ session, onLogout }) {
                 setAiChat({ question: q, answer: ans });
             } catch (err) {
                 console.error("[AI] Chat error:", err);
-                setAiChat({ question: q, answer: `[SYSTEM ERROR] ${err.message || "The void is silent. Try again."}` });
+                setAiChat({ question: q, answer: themedAIError(err) });
             }
         }
         setAiLoading(false);
@@ -533,7 +560,7 @@ export default function GameApp({ session, onLogout }) {
                 return addLog({ ...prev, quests: [...prev.quests, ...nq] }, `System generated ${nq.length} new quests.`, "ai");
             });
         } catch (err) {
-            update(prev => addLog(prev, `Failed to generate quests: ${err.message}`, "system"));
+            update(prev => addLog(prev, themedAIError(err), "system"));
         }
         setAiLoading(false);
     };

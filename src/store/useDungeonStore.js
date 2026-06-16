@@ -35,6 +35,11 @@ export const useDungeonStore = create((set, get) => ({
     dungeonTimer: null,
     _timerInterval: null, // private — stores the setInterval reference
 
+    // 📖 B-01 FIX: Real-world timestamp (ms) when the current focus block started.
+    // Persisted to Firestore via GameApp so the remaining time can be
+    // reconstructed after a page refresh: remaining = 25*60 - elapsed seconds.
+    dungeonStartedAt: null,
+
     // 📖 AUTO-COMPLETE CALLBACK
     // When the 25-min timer hits zero, the store calls this registered function
     // so the overlay can award XP and fire victory effects.
@@ -70,7 +75,8 @@ export const useDungeonStore = create((set, get) => ({
     }),
 
     /**
-     * Start the 25-minute focus timer
+     * Start the 25-minute focus timer.
+     * Records dungeonStartedAt so the timer can survive a page refresh.
      */
     startTimer: () => {
         const { _timerInterval } = get();
@@ -78,12 +84,15 @@ export const useDungeonStore = create((set, get) => ({
         // Clear any existing timer first
         if (_timerInterval) clearInterval(_timerInterval);
 
+        const startedAt = Date.now();
+        const totalSeconds = 25 * 60;
+
         const interval = setInterval(() => {
             const { dungeonTimer: currentTime } = get();
             if (currentTime === null || currentTime <= 0) {
                 // Timer hit zero — stop the interval
                 clearInterval(get()._timerInterval);
-                set({ _timerInterval: null, dungeonTimer: null });
+                set({ _timerInterval: null, dungeonTimer: null, dungeonStartedAt: null });
 
                 // 📖 FIX: Call completeFocusBlock and pass the result back to the
                 // overlay via the registered callback. Without this, XP was never
@@ -96,7 +105,53 @@ export const useDungeonStore = create((set, get) => ({
             set({ dungeonTimer: currentTime - 1 });
         }, 1000);
 
-        set({ dungeonTimer: 25 * 60, _timerInterval: interval });
+        set({ dungeonTimer: totalSeconds, _timerInterval: interval, dungeonStartedAt: startedAt });
+    },
+
+    /**
+     * 📖 B-01 FIX: Restore a running timer after a page refresh.
+     * Called by GameApp when Firestore data loads and dungeon.active is true
+     * AND dungeonStartedAt is set.
+     *
+     * How it works:
+     *   1. We know when the block started (dungeonStartedAt, saved in Firestore).
+     *   2. We compute elapsed = now - startedAt.
+     *   3. remaining = 25*60 - elapsed.
+     *   4. If remaining > 0  → resume the timer from that point.
+     *   5. If remaining <= 0 → the block already finished while offline;
+     *      auto-complete it immediately (award XP, fire callback).
+     */
+    restoreTimer: (startedAt) => {
+        const { _timerInterval } = get();
+        if (_timerInterval) clearInterval(_timerInterval); // safety
+
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        const remaining = 25 * 60 - elapsed;
+
+        if (remaining <= 0) {
+            // Block expired while the tab was closed — complete it now
+            set({ dungeonStartedAt: null, dungeonTimer: null, _timerInterval: null });
+            const { completeFocusBlock, _onAutoComplete } = get();
+            const result = completeFocusBlock();
+            if (_onAutoComplete) _onAutoComplete(result);
+            return;
+        }
+
+        // Resume counting down from the correct remaining seconds
+        const interval = setInterval(() => {
+            const { dungeonTimer: currentTime } = get();
+            if (currentTime === null || currentTime <= 0) {
+                clearInterval(get()._timerInterval);
+                set({ _timerInterval: null, dungeonTimer: null, dungeonStartedAt: null });
+                const { completeFocusBlock, _onAutoComplete } = get();
+                const result = completeFocusBlock();
+                if (_onAutoComplete) _onAutoComplete(result);
+                return;
+            }
+            set({ dungeonTimer: currentTime - 1 });
+        }, 1000);
+
+        set({ dungeonTimer: remaining, _timerInterval: interval, dungeonStartedAt: startedAt });
     },
 
     /**
@@ -118,6 +173,7 @@ export const useDungeonStore = create((set, get) => ({
             dungeon: { ...dungeon, blocks, bossHp: newHp, active: !defeated },
             dungeonTimer: null,
             _timerInterval: null,
+            dungeonStartedAt: null, // clear persisted start time on block completion
         });
 
         return {
@@ -137,6 +193,7 @@ export const useDungeonStore = create((set, get) => ({
             dungeon: { ...dungeon, active: false },
             dungeonTimer: null,
             _timerInterval: null,
+            dungeonStartedAt: null, // clear start time on retreat
         });
     },
 
@@ -151,6 +208,7 @@ export const useDungeonStore = create((set, get) => ({
             dungeonTimer: null,
             _timerInterval: null,
             _onAutoComplete: null,
+            dungeonStartedAt: null,
         });
     },
 }));

@@ -152,3 +152,52 @@ export async function callClaude(messages, systemPrompt) {
 
     throw lastError;
 }
+
+// ── B-02 FIX: Themed AI error translator ────────────────────────────────────
+// Maps raw HTTP / network errors from OpenRouter / Firebase Cloud Functions
+// into dramatic, in-universe System messages so the user never sees raw API
+// error strings like "OpenRouter error 429" in the chat panel.
+//
+// Usage:  catch (err) { setAiChat({ ..., answer: themedAIError(err) }); }
+// ────────────────────────────────────────────────────────────────────────────
+export function themedAIError(err) {
+    const msg = (err?.message || "").toLowerCase();
+
+    // Rate-limited / quota exceeded
+    if (msg.includes("429") || msg.includes("rate limit") || msg.includes("quota")) {
+        return "[SYSTEM ALERT] ⚠ The Void is temporarily overwhelmed. Too many Hunters are querying the System at once. Rest for a moment, then try again.";
+    }
+
+    // Auth / API key issues
+    if (msg.includes("401") || msg.includes("403") || msg.includes("api key") || msg.includes("unauthorized")) {
+        return "[SYSTEM ALERT] ⚠ Gateway authentication failed. The System's seal is broken. Report this to your administrator.";
+    }
+
+    // Service unavailable / gateway errors
+    if (msg.includes("502") || msg.includes("503") || msg.includes("504") || msg.includes("unavailable")) {
+        return "[SYSTEM ALERT] ⚠ The dimensional gateway is currently unstable. The AI oracle cannot be reached. Stand by, Hunter.";
+    }
+
+    // Network / offline
+    if (msg.includes("network") || msg.includes("fetch") || msg.includes("failed to fetch") || msg.includes("offline")) {
+        return "[SYSTEM ALERT] ⚠ Connection to the Shadow Realm severed. Check your network link and try again.";
+    }
+
+    // Timeout
+    if (msg.includes("timeout") || msg.includes("timed out")) {
+        return "[SYSTEM ALERT] ⚠ The oracle did not respond in time. The System's patience has limits. Try again shortly.";
+    }
+
+    // AI returned unparseable / non-JSON response (quest generation only)
+    if (msg.includes("text response") || msg.includes("plain text") || msg.includes("json")) {
+        return "[SYSTEM ALERT] ⚠ The oracle spoke in riddles instead of data. The System could not parse the prophecy. Rephrase your request or try again.";
+    }
+
+    // API key not configured (local dev only)
+    if (msg.includes("openrouter api key not set")) {
+        return "[SYSTEM OFFLINE] ⚠ The AI oracle is not configured. The System requires a valid API key to channel its power.";
+    }
+
+    // Generic fallback — still themed, never raw
+    return "[SYSTEM ALERT] ⚠ An unknown disturbance disrupted the oracle. The void is silent for now — try again, Hunter.";
+}
