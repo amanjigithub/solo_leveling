@@ -124,33 +124,13 @@ export default function GameApp({ session, onLogout }) {
     const setDungeonFromStore  = useDungeonStore(s => s.setDungeon);
     const restoreTimerFromStore = useDungeonStore(s => s.restoreTimer);
 
-    // 📖 B-01 FIX (revised): Watch dungeonStartedAt in the Zustand store.
-    // When it changes (timer started or cleared), persist directly to localStorage
-    // using the separate DUNGEON_TIMER_KEY — bypassing the debounced Firestore
-    // update() path that caused the race condition in the previous implementation.
+    // 📖 B-01 FIX: Watch dungeonStartedAt in Zustand store.
+    // When it changes (timer started or cleared), save to the separate timer key.
     const dungeonStartedAt = useDungeonStore(s => s.dungeonStartedAt);
     useEffect(() => {
-        // Save startedAt to its own localStorage key so it survives a page refresh
-        // without needing to wait for a Firestore round-trip.
         saveDungeonTimer(session.uid, dungeonStartedAt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [dungeonStartedAt]);
-
-    // 📖 B-01 FIX: Also sync dungeon.active/bossName/etc back into the main
-    // localStorage state blob whenever Zustand dungeon state changes.
-    // Without this, opening the gate (dungeon.active → true) only updates Zustand
-    // but the main state blob still has dungeon.active=false — so on refresh,
-    // the localStorage restore guard finds active=false and skips timer restore.
-    const storeDungeon = useDungeonStore(s => s.dungeon);
-    useEffect(() => {
-        if (!state) return;
-        // Write the live dungeon object into localStorage state so refreshes
-        // can read dungeon.active correctly. Use direct localSave to avoid
-        // triggering the reactive Firestore update loop.
-        const merged = { ...state, dungeon: storeDungeon };
-        localSave(session.uid, merged);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [storeDungeon]);
 
     // ── Auto-start scheduling if permission already granted ───────────────────
     useEffect(() => {
@@ -204,14 +184,16 @@ export default function GameApp({ session, onLogout }) {
             setState(resetCached);
 
             // 📖 B-01 FIX: Immediately restore a running dungeon timer from localStorage.
-            // This runs synchronously before Firestore responds, so the timer
-            // reappears as soon as the app hydrates — no waiting for network.
+            // dungeon.active is now persisted to Firestore (via onDungeonStateChange
+            // callback) so the cached value is reliable. Read startedAt from the
+            // separate timer key (also set synchronously when timer starts).
             const savedStartedAt = loadDungeonTimer(uid);
             if (savedStartedAt && resetCached.dungeon?.active) {
                 // Push the saved dungeon state into the Zustand store first
                 setDungeonFromStore(resetCached.dungeon);
                 // Then restore the countdown timer from the wall-clock start time
                 restoreTimerFromStore(savedStartedAt);
+                console.log(`[B-01] Timer restored from localStorage: ${savedStartedAt}, dungeon active`);
             }
         }
 
@@ -247,12 +229,16 @@ export default function GameApp({ session, onLogout }) {
                             // gate immediately after it opens!
                             if (loaded.dungeon && !useDungeonStore.getState().dungeon.active) {
                                 setDungeonFromStore(loaded.dungeon);
-                                // 📖 B-01 (revised): localStorage-based restore already ran in
-                                // Step 1. This Firestore path is only a safety net for first-load
-                                // when no local cache exists (e.g. different browser / incognito).
-                                if (!prev && loaded.dungeon.active) {
+                                // 📖 B-01: If dungeon is active in Firestore, restore timer.
+                                // dungeon.active=true is now written to Firestore when gate opens.
+                                // loadDungeonTimer reads the separate localStorage key set
+                                // synchronously when the user started the focus block.
+                                if (loaded.dungeon.active) {
                                     const savedStartedAt = loadDungeonTimer(uid);
-                                    if (savedStartedAt) restoreTimerFromStore(savedStartedAt);
+                                    if (savedStartedAt) {
+                                        restoreTimerFromStore(savedStartedAt);
+                                        console.log(`[B-01] Timer restored from Firestore path: ${savedStartedAt}`);
+                                    }
                                 }
                             }
                             return loaded;
@@ -401,7 +387,7 @@ export default function GameApp({ session, onLogout }) {
 
     // ── enterDungeon / startFocusBlock / completeFocusBlock / retreatDungeon ───────
     // These are now handled INSIDE DungeonFocusOverlay via useDungeonStore.
-    // GameApp only needs a callback for when XP should be awarded:
+    // GameApp only needs callbacks for XP awards and dungeon state persistence.
     const handleDungeonBlockComplete = (xpEarned, defeated) => {
         update(prev => {
             let s = { ...prev };
@@ -414,6 +400,15 @@ export default function GameApp({ session, onLogout }) {
             }
             return s;
         });
+    };
+
+    // 📖 B-01 FIX: Called by DungeonFocusOverlay whenever the gate opens, closes,
+    // or a block completes. Writes the live dungeon object (with active=true/false,
+    // boss HP, blocks, etc.) into the main Firestore document immediately.
+    // This makes dungeon.active durable: on refresh, Firestore (and localStorage
+    // cache) will have the correct value so the timer restore logic can read it.
+    const handleDungeonStateChange = (liveDungeon) => {
+        update(prev => ({ ...prev, dungeon: liveDungeon }));
     };
 
     const handleDungeonLog = (msg, type) => {
@@ -848,6 +843,7 @@ export default function GameApp({ session, onLogout }) {
                             playerRank={state.player.rank}
                             onBlockComplete={handleDungeonBlockComplete}
                             onLogMessage={handleDungeonLog}
+                            onDungeonStateChange={handleDungeonStateChange}
                         />
                     )}
 

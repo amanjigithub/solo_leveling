@@ -80,6 +80,7 @@ export default function DungeonFocusOverlay({
     playerRank,
     onBlockComplete,
     onLogMessage,
+    onDungeonStateChange,
 }) {
     // ── Read dungeon state from Zustand store ─────────────────────────────────
     const dungeon                = useDungeonStore(s => s.dungeon);
@@ -196,11 +197,28 @@ export default function DungeonFocusOverlay({
 
         // 4. Start the 25-min countdown
         startTimer();
+
+        // 5. 📖 B-01 FIX: Tell GameApp to persist dungeon.active=true to Firestore
+        // immediately. Without this, dungeon.active stays false in Firestore and
+        // the timer restore logic has nothing to read on page refresh.
+        if (onDungeonStateChange) {
+            const newDungeon = {
+                active: true,
+                bossName: dungeonConfig.boss,
+                bossEmoji: dungeonConfig.emoji,
+                bossHpMax: 100,
+                bossHp: 100,
+                blocks: 0,
+                blocksNeeded: dungeonConfig.blocksNeeded,
+            };
+            onDungeonStateChange(newDungeon);
+        }
     };
 
     // ── Complete a focus block: deal damage, haptics, victory check ───────────
     const handleCompleteBlock = () => {
         const { defeated, xpEarned } = completeFocus();
+        const liveDungeon = useDungeonStore.getState().dungeon;
         if (defeated) {
             // Victory haptics — long celebratory pattern
             vibrate([300, 100, 300, 100, 500]);
@@ -212,6 +230,8 @@ export default function DungeonFocusOverlay({
             vibrate([150]);
             onLogMessage(`Focus block complete! +${xpEarned} XP. Boss damaged!`, "info");
         }
+        // 📖 B-01: Persist updated dungeon state (HP, blocks, active) to Firestore
+        if (onDungeonStateChange) onDungeonStateChange(liveDungeon);
         onBlockComplete(xpEarned, defeated);
     };
 
@@ -222,6 +242,8 @@ export default function DungeonFocusOverlay({
         releaseWakeLock();
         vibrate([200]);
         onLogMessage("Retreated from dungeon.", "system");
+        // 📖 B-01: Persist dungeon.active=false to Firestore on retreat
+        if (onDungeonStateChange) onDungeonStateChange(useDungeonStore.getState().dungeon);
     };
 
     // ── HP bar color: changes from green → orange → red as boss is damaged ────
