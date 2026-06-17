@@ -18,6 +18,27 @@ const localSave = (uid, state) => {
     try { localStorage.setItem(STORAGE_KEY(uid), JSON.stringify(state)); } catch { }
 };
 
+// ── B-01: Dungeon timer persistence helpers ───────────────────────────────────
+// We store dungeonStartedAt SEPARATELY from the main state blob.
+// This sidesteps the Firestore onSnapshot → state → Zustand guard race condition.
+// On refresh: read this key first (synchronous), restore timer immediately.
+const DUNGEON_TIMER_KEY = (uid) => `shadow-dungeon-timer-${uid}`;
+const saveDungeonTimer = (uid, startedAt) => {
+    try {
+        if (startedAt) {
+            localStorage.setItem(DUNGEON_TIMER_KEY(uid), String(startedAt));
+        } else {
+            localStorage.removeItem(DUNGEON_TIMER_KEY(uid));
+        }
+    } catch { }
+};
+const loadDungeonTimer = (uid) => {
+    try {
+        const raw = localStorage.getItem(DUNGEON_TIMER_KEY(uid));
+        return raw ? Number(raw) : null;
+    } catch { return null; }
+};
+
 export default function GameApp({ session, onLogout }) {
     const [state, setState] = useState(null);
     const [tab, setTab] = useState("quests");
@@ -103,23 +124,33 @@ export default function GameApp({ session, onLogout }) {
     const setDungeonFromStore  = useDungeonStore(s => s.setDungeon);
     const restoreTimerFromStore = useDungeonStore(s => s.restoreTimer);
 
-    // 📖 B-01 FIX: Watch dungeonStartedAt in the store.
-    // Whenever the user starts a focus block, startedAt becomes a timestamp.
-    // We immediately persist it to Firestore (via the normal `save` path) so
-    // that a page refresh can reconstruct the remaining timer from it.
+    // 📖 B-01 FIX (revised): Watch dungeonStartedAt in the Zustand store.
+    // When it changes (timer started or cleared), persist directly to localStorage
+    // using the separate DUNGEON_TIMER_KEY — bypassing the debounced Firestore
+    // update() path that caused the race condition in the previous implementation.
     const dungeonStartedAt = useDungeonStore(s => s.dungeonStartedAt);
     useEffect(() => {
-        if (!state) return;
-        // Only write when value actually changed to avoid spurious saves
-        const firestoreValue = state.dungeon?.dungeonStartedAt ?? null;
-        if (dungeonStartedAt !== firestoreValue) {
-            update(prev => ({
-                ...prev,
-                dungeon: { ...prev.dungeon, dungeonStartedAt },
-            }));
-        }
+        // Save startedAt to its own localStorage key so it survives a page refresh
+        // without needing to wait for a Firestore round-trip.
+        saveDungeonTimer(session.uid, dungeonStartedAt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [dungeonStartedAt]);
+
+    // 📖 B-01 FIX: Also sync dungeon.active/bossName/etc back into the main
+    // localStorage state blob whenever Zustand dungeon state changes.
+    // Without this, opening the gate (dungeon.active → true) only updates Zustand
+    // but the main state blob still has dungeon.active=false — so on refresh,
+    // the localStorage restore guard finds active=false and skips timer restore.
+    const storeDungeon = useDungeonStore(s => s.dungeon);
+    useEffect(() => {
+        if (!state) return;
+        // Write the live dungeon object into localStorage state so refreshes
+        // can read dungeon.active correctly. Use direct localSave to avoid
+        // triggering the reactive Firestore update loop.
+        const merged = { ...state, dungeon: storeDungeon };
+        localSave(session.uid, merged);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [storeDungeon]);
 
     // ── Auto-start scheduling if permission already granted ───────────────────
     useEffect(() => {
@@ -171,6 +202,17 @@ export default function GameApp({ session, onLogout }) {
             const resetCached = applyDailyReset(cached);
             if (resetCached !== cached) localSave(uid, resetCached); // persist reset
             setState(resetCached);
+
+            // 📖 B-01 FIX: Immediately restore a running dungeon timer from localStorage.
+            // This runs synchronously before Firestore responds, so the timer
+            // reappears as soon as the app hydrates — no waiting for network.
+            const savedStartedAt = loadDungeonTimer(uid);
+            if (savedStartedAt && resetCached.dungeon?.active) {
+                // Push the saved dungeon state into the Zustand store first
+                setDungeonFromStore(resetCached.dungeon);
+                // Then restore the countdown timer from the wall-clock start time
+                restoreTimerFromStore(savedStartedAt);
+            }
         }
 
         // ── Step 2: Open real-time Firestore listener ──────────────────────
@@ -205,14 +247,12 @@ export default function GameApp({ session, onLogout }) {
                             // gate immediately after it opens!
                             if (loaded.dungeon && !useDungeonStore.getState().dungeon.active) {
                                 setDungeonFromStore(loaded.dungeon);
-
-                                // 📖 B-01 FIX: If a timer block was active when the user
-                                // last closed the tab, dungeonStartedAt will be a saved timestamp.
-                                // Reconstruct the countdown from elapsed wall-clock time so the
-                                // timer picks up exactly where it left off after a refresh.
-                                const savedStartedAt = loaded.dungeon?.dungeonStartedAt;
-                                if (loaded.dungeon.active && savedStartedAt) {
-                                    restoreTimerFromStore(savedStartedAt);
+                                // 📖 B-01 (revised): localStorage-based restore already ran in
+                                // Step 1. This Firestore path is only a safety net for first-load
+                                // when no local cache exists (e.g. different browser / incognito).
+                                if (!prev && loaded.dungeon.active) {
+                                    const savedStartedAt = loadDungeonTimer(uid);
+                                    if (savedStartedAt) restoreTimerFromStore(savedStartedAt);
                                 }
                             }
                             return loaded;
