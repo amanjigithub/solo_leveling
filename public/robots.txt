@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://sololevelinghabittracker.netlify.app/sitemap.xml
+

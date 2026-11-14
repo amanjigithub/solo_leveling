@@ -10,7 +10,7 @@ const GameApp  = lazy(() => import("./components/GameApp.jsx"));
 
 // Shared loading spinner shown while a lazy chunk downloads
 const SystemBooting = () => (
-    <div style={{ background: "#020408", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div style={{ background: "#020408", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", contain: "layout" }}>
         <div style={{ textAlign: "center", color: "#00a8ff", fontFamily: "'Orbitron',monospace", fontSize: 12, letterSpacing: 4 }}>
             <div className="spin" style={{ fontSize: 32, marginBottom: 16 }}>⚔</div>
             <div>LOADING SYSTEM...</div>
