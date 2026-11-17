@@ -29,6 +29,20 @@
   <link rel="preconnect" href="https://securetoken.googleapis.com" />
   <link rel="preconnect" href="https://openrouter.ai" />
 
+  <!-- Google Fonts: load non-render-blocking via media trick -->
+  <!-- 1. Load as print (non-blocking), 2. onload switches to all (applies styles) -->
+  <!-- 3. <noscript> is the synchronous fallback for no-JS environments -->
+  <!-- display=swap: show system font immediately, swap to Orbitron/Rajdhani when ready (prevents invisible text) -->
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600;700&display=swap"
+    media="print"
+    onload="this.media='all'"
+  />
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600;700&display=swap" />
+  </noscript>
+
   <!-- DNS-prefetch: resolve DNS early for secondary origins -->
   <link rel="dns-prefetch" href="https://apis.google.com" />
   <link rel="dns-prefetch" href="https://accounts.google.com" />
