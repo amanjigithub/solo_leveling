@@ -77,7 +77,7 @@ export default function App() {
     }
 
     if (checking) return (
-        <div style={{ background: "#020408", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ background: "#020408", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", contain: "layout" }}>
             <div style={{ textAlign: "center", color: "#00a8ff", fontFamily: "'Orbitron',monospace", fontSize: 12, letterSpacing: 4 }}>
                 <div className="spin" style={{ fontSize: 32, marginBottom: 16 }}>⚔</div>
                 <div>CONNECTING TO SECURE CLOUD...</div>
