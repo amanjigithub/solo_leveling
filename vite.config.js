@@ -71,18 +71,48 @@ export default defineConfig({
 
   build: {
     sourcemap: false,
-    // ── Manual chunk splitting ─────────────────────────────────────────────
-    // Breaks the single bundle into smaller cached chunks.
-    // Returning users only re-download the chunk that changed, not everything.
+    // ── Target modern browsers — eliminates legacy polyfill bloat (~30KB) ──
+    target: 'es2020',
     rollupOptions: {
       output: {
-        manualChunks: {
-          // React core + framer-motion (rarely changes)
-          'vendor': ['react', 'react-dom', 'framer-motion'],
-          // Firebase SDK (large, rarely changes)
-          'firebase': ['firebase/app', 'firebase/auth', 'firebase/firestore', 'firebase/functions'],
-          // Zustand store
-          'state': ['zustand'],
+        // ── Granular chunk splitting ──────────────────────────────────────
+        // The old monolith: firebase(475KB) + vendor(270KB) = 750KB on first load.
+        // The new approach: each chunk is independently cacheable. Crucially,
+        // firebase-firestore (242KB) is NEVER downloaded by unauthenticated
+        // visitors — it lazy-loads only after the user logs in via GameApp.
+        manualChunks(id) {
+          // React core — tiny, always needed, cached forever
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+            return 'react-core';
+          }
+          // Framer Motion — heavy (126KB), only used inside GameApp (post-login)
+          if (id.includes('node_modules/framer-motion')) {
+            return 'framer-motion';
+          }
+          // Firebase Auth — needed on the login screen
+          if (id.includes('node_modules/firebase/auth') || id.includes('node_modules/@firebase/auth')) {
+            return 'firebase-auth';
+          }
+          // Firebase Firestore — 242KB, deferred until AFTER user logs in
+          if (id.includes('node_modules/firebase/firestore') || id.includes('node_modules/@firebase/firestore')) {
+            return 'firebase-firestore';
+          }
+          // Firebase app core — shared tiny base
+          if (id.includes('node_modules/firebase/app') || id.includes('node_modules/@firebase/app')) {
+            return 'firebase-core';
+          }
+          // Remaining Firebase internals (util, component, logger, etc.)
+          if (id.includes('node_modules/firebase') || id.includes('node_modules/@firebase')) {
+            return 'firebase-misc';
+          }
+          // Zustand — tiny state manager
+          if (id.includes('node_modules/zustand')) {
+            return 'state';
+          }
+          // Google OAuth + jwt-decode — only needed on auth screen
+          if (id.includes('node_modules/@react-oauth') || id.includes('node_modules/jwt-decode')) {
+            return 'google-oauth';
+          }
         }
       }
     }
